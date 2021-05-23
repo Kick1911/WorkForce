@@ -69,10 +69,10 @@ class Workspace:
 # TODO: Chain and chord
 class WorkForce:
     _index = 0
-    workers = None
+    workspaces = None
 
-    def __init__(self, workers=1):
-        self.workers = [Workspace() for _ in range(workers)]
+    def __init__(self, workspaces=1):
+        self.workspaces = [Workspace() for _ in range(workspaces)]
 
     def schedule_async(self, *args, **kwargs) -> asyncio.Task:
         return self._next.run_func_async(*args, **kwargs)
@@ -98,12 +98,10 @@ class WorkForce:
         def wrapper(func):
             return process(func, **ekwargs)
 
-        ret = process(eargs[0]) if len(eargs) > 0 else wrapper
-
-        return ret
+        return process(eargs[0]) if len(eargs) > 0 else wrapper
 
     @property
     def _next(self) -> Workspace:
-        self._index = (self._index + 1) % len(self.workers)
-        return self.workers[self._index]
+        self._index = (self._index + 1) % len(self.workspaces)
+        return self.workspaces[self._index]
 
