@@ -7,6 +7,27 @@ def test_version():
     assert __version__ == '0.1.0'
 
 
+def test_decorator():
+    class Foo:
+        result = 0
+    bar = Foo()
+    workforce = WorkForce(2)
+
+    def callback(task, wf, coro):
+        bar.result = task.result()
+
+    @workforce.task(callback=callback)
+    async def add(a, b):
+        return a + b
+
+    task = add.s(4, 5)
+    time.sleep(0.5)
+
+    assert task.done()
+    assert task.result() == 9
+    assert bar.result == 9
+
+
 def test_schedule_coro():
     class Foo:
         count = 0

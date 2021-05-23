@@ -6,14 +6,7 @@ from threading import Thread
 from collections.abc import Callable
 
 
-def _handle_result(coro, task):
-    try:
-        task.result()
-    except Exception as e:
-        print(e)
-
-
-class Worker:
+class Workspace:
     loop = None
     thread = None
 
@@ -31,9 +24,8 @@ class Worker:
 
     def _wrap_coro(self, coro, callback: Callable = None) -> asyncio.Task:
         task = asyncio.ensure_future(coro, loop=self.loop)
-        task.add_done_callback(functools.partial(_handle_result, task))
         if callback:
-            task.add_done_callback(callback)
+            task.add_done_callback(functools.partial(callback, task, self))
         return task
 
     def run_func_async(
@@ -63,7 +55,10 @@ class Worker:
 
         coro = asyncio.wait_for(
             self.loop.run_in_executor(
-                self.pool, functools.partial(func, *(args or ()), **(kwargs or {}))
+                self.pool,
+                functools.partial(
+                    func, *(args or ()), **(kwargs or {})
+                )
             ),
             timeout=timeout
         )
@@ -77,7 +72,7 @@ class WorkForce:
     workers = None
 
     def __init__(self, workers=1):
-        self.workers = [Worker() for _ in range(workers)]
+        self.workers = [Workspace() for _ in range(workers)]
 
     def schedule_async(self, *args, **kwargs) -> asyncio.Task:
         return self._next.run_func_async(*args, **kwargs)
@@ -85,8 +80,30 @@ class WorkForce:
     def schedule(self, *args, **kwargs) -> asyncio.Task:
         return self._next.run_in_thread(*args, **kwargs)
 
+    def task(self, *eargs, **ekwargs):
+        def process(func, **pkwargs):
+            def schedule_async(*args, **kwargs):
+                return self.schedule_async(func, args=args, kwargs=kwargs,
+                                           **pkwargs)
+
+            def schedule(*args, **kwargs):
+                return self.schedule(func, args=args, kwargs=kwargs, **pkwargs)
+
+            func.s = {
+                'async': schedule_async,
+                'sync': schedule,
+            }[pkwargs.get('run_type', 'async')]
+            return func
+
+        def wrapper(func):
+            return process(func, **ekwargs)
+
+        ret = process(eargs[0]) if len(eargs) > 0 else wrapper
+
+        return ret
+
     @property
-    def _next(self) -> Worker:
+    def _next(self) -> Workspace:
         self._index = (self._index + 1) % len(self.workers)
         return self.workers[self._index]
 
