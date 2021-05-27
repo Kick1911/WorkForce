@@ -1,10 +1,18 @@
 import time
 import asyncio
-from workforce import __version__, WorkForce
+from workforce import __version__, WorkForce, Worker
 
 
 def test_version():
     assert __version__ == '0.1.0'
+
+
+def test_workers():
+    workforce = WorkForce(2)
+
+    @workforce.worker
+    class Dev(Worker):
+        pass
 
 
 def test_decorator():
