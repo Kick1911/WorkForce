@@ -3,7 +3,17 @@ import asyncio
 import functools
 import concurrent.futures
 from threading import Thread
+from asyncio import TimeoutError
 from collections.abc import Callable
+
+
+def handle_error(task):
+    try:
+        task.result()
+    except TimeoutError:
+        print('TimeoutError')
+    except Exception as e:
+        print('Exception:', e)
 
 
 class Workspace:
@@ -24,6 +34,7 @@ class Workspace:
 
     def _wrap_coro(self, coro, callback: Callable = None) -> asyncio.Task:
         task = asyncio.ensure_future(coro, loop=self.loop)
+        task.add_done_callback(handle_error)
         if callback:
             task.add_done_callback(functools.partial(callback, task, self))
         return task
@@ -38,10 +49,9 @@ class Workspace:
 
     def run_coro_async(self, coro, callback: Callable = None,
                        timeout: int = 1) -> asyncio.Task:
+        coro = asyncio.wait_for(coro, timeout=timeout)
         task = self._wrap_coro(coro, callback)
-        asyncio.run_coroutine_threadsafe(
-            asyncio.wait_for(coro, timeout=timeout), self.loop
-        )
+        asyncio.run_coroutine_threadsafe(coro, self.loop)
         return task
 
     def run_in_thread(
