@@ -3,7 +3,7 @@ import asyncio
 from workforce import WorkForce, OrganisedWorker
 
 
-class HTTP:
+class HTTPRequest:
     def __init__(self, method, path, version, headers, payload, writer=None):
         self.method = method
         self.path = path
@@ -31,54 +31,62 @@ class HTTP:
         return cls(method, path, version, headers, payload)
 
     def __str__(self):
-        return '\n'.join([self.method, self.path, self.version,
-                          self.headers, self.payload])
+        return '\n'.join([f'{self.method} {self.path} {self.version}',
+                          str(self.headers), self.payload])
 
 
 class Server(WorkForce):
 
     def __init__(self, threads=1):
-        self.workers = {}
         super().__init__(threads)
 
     def get_worker(self, path):
         w = self.workers
-        print('Workers:', w)
         path = path.split('/')
-        for p in path[1:-1]:
+        for p in path[1:]:
             try:
                 w = w[p]
             except KeyError:
                 w = w['_']
-        return w[path[-1]]
+        return w['/']
 
     def worker(self, name):
         def wrapper(cls):
+            print('Loading Worker: ', name)
             path = name.split('/')
             w = self.workers
-            for p in path[1:-1]:
+            for p in path[1:]:
                 x = '_' if p.startswith('{') else p
                 w[x] = {}
                 w = w[x]
-            w[path[-1]] = cls()
+            w['/'] = cls(name)
             return cls
         return wrapper
 
     async def handle_request(self, reader, writer):
-        data = bytes()
+        data = bytearray()
         while 1:
             part = await reader.read(255)
-            if part:
-                data += part
-            else:
+            data.extend(part)
+            if len(part) < 255:
                 break
-        message = data.decode()
+
+        message = data.decode('latin1').rstrip()
         addr = writer.get_extra_info('peername')
         print(f"Received {message!r} from {addr!r}")
-        request = HTTP.parse(data.decode())
+
+        request = HTTPRequest.parse(data.decode())
         request.writer = writer
 
-        self.schedule_workflow(request.path, request)
+        def callback(task, wf, coro):
+            print('Close Connection')
+            writer.close()
+
+        try:
+            self.schedule_workflow(request.path, request, callback=callback)
+        except self.WorkerNotFound:
+            print('Response with 404 Not Found')
+            writer.close()
 
     async def _run(self):
         server = await asyncio.start_server(
@@ -95,18 +103,46 @@ class Server(WorkForce):
 
 server = Server()
 
-@server.worker(name='/company/{c_id}/employee')
-class Endpoint(OrganisedWorker):
-    def start_workflow(self, request):
+@server.worker(name='/')
+class Root(OrganisedWorker):
+    def start_workflow(self, request, loop=None, **kwargs):
         try:
             func = getattr(self, request.method.lower())
-            self.run_coro_async(func(request))
+            p = parse(self.name, request.path)
+            self.run_coro_async(
+                func(request, **dict(p.named.items())),
+                loop=loop, **kwargs
+            )
         except AttributeError:
             print('Method not supported')
 
     async def get(self, request):
+        response = b"""
+HTTP/1.1 200 OK
+Connection: closed
+Content-Type: text/html; charset=utf-8
+Content-Length: 26
+
+<p>Made with WorkForce</p>
+        """
         print(f'get: {request}')
-        request.writer.write(request.payload)
+        request.writer.write(response)
+        await request.writer.drain()
+
+
+@server.worker(name='/company/{c_id}/employee/{e_id}')
+class Employee(Root):
+    async def get(self, request, c_id, e_id):
+        response = b"""
+HTTP/1.1 200 OK
+Connection: closed
+Content-Type: text/html; charset=utf-8
+Content-Length: 26
+
+<p>Made with WorkForce</p>
+        """
+        print(f'get: {request}')
+        request.writer.write(response)
         await request.writer.drain()
 
     async def post(self, request):
@@ -121,3 +157,4 @@ class Endpoint(OrganisedWorker):
     async def delete(self, request):
         print(f'delete: {request}')
 
+server.start()

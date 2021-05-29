@@ -44,11 +44,11 @@ def test_schedule_coro():
     workforce = WorkForce(2)
 
     async def foo():
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.8)
         bar.count += 1
 
-    f1 = workforce.schedule_async(foo)
-    f2 = workforce.schedule_async(foo)
+    f1 = workforce.schedule_async('default', func=foo)
+    f2 = workforce.schedule_async('default', func=foo)
     time.sleep(2)
     assert f1.done()
     assert f2.done()

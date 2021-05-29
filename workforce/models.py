@@ -3,13 +3,29 @@ import asyncio
 import functools
 import concurrent.futures
 from threading import Thread
+from asyncio import TimeoutError
 from collections.abc import Callable
 
 
+def handle_error(task):
+    try:
+        task.result()
+    except TimeoutError:
+        print('TimeoutError:', task)
+    except Exception:
+        task.print_stack()
+
+
 class Worker:
+    pool = None
+
+    def __init__(self, name):
+        self.name = name
+
     def _wrap_coro(self, coro, callback: Callable = None,
                    loop=None) -> asyncio.Task:
         task = asyncio.ensure_future(coro, loop=loop)
+        task.add_done_callback(handle_error)
         if callback:
             task.add_done_callback(functools.partial(callback, task, self))
         return task
@@ -24,10 +40,9 @@ class Worker:
 
     def run_coro_async(self, coro, callback: Callable = None,
                        timeout: int = 1, loop=None) -> asyncio.Task:
-        task = self._wrap_coro(coro, callback)
-        asyncio.run_coroutine_threadsafe(
-            asyncio.wait_for(coro, timeout=timeout), loop
-        )
+        waited_coro = asyncio.wait_for(coro, timeout=timeout, loop=loop)
+        task = self._wrap_coro(waited_coro, callback, loop=loop)
+        asyncio.run_coroutine_threadsafe(waited_coro, loop=loop)
         return task
 
     def run_in_thread(
@@ -46,9 +61,9 @@ class Worker:
                     func, *(args or ()), **(kwargs or {})
                 )
             ),
-            timeout=timeout
+            timeout=timeout, loop=loop
         )
-        return self._wrap_coro(coro, callback)
+        return self._wrap_coro(coro, callback, loop=loop)
 
 
 class OrganisedWorker(Worker):
@@ -56,7 +71,10 @@ class OrganisedWorker(Worker):
         self, args: tuple = None, kwargs: dict = None,
         *eargs, **ekwargs
     ) -> asyncio.Task:
-        return self.run_coro_async(self.task(*args, **kwargs))
+        return self.run_coro_async(
+            self.task(*args, **kwargs),
+            *eargs, **ekwargs
+        )
 
     async def task(self, *args, **kwargs):
         raise NotImplementedError
@@ -91,7 +109,7 @@ class WorkForce:
 
     def __init__(self, workspaces=1):
         self.workspaces = [Workspace() for _ in range(workspaces)]
-        self.workers = {'default': Worker()}
+        self.workers = {'default': Worker('default')}
 
     def get_worker(self, data):
         return self.workers['default']
@@ -101,7 +119,7 @@ class WorkForce:
             return self.get_worker(data).start_workflow(
                 *args, loop=self._next.loop, **kwargs
             )
-        except Exception:
+        except KeyError:
             raise self.WorkerNotFound
 
     def schedule_async(self, data, *args, **kwargs) -> asyncio.Task:
@@ -109,7 +127,7 @@ class WorkForce:
             return self.get_worker(data).run_func_async(
                 *args, loop=self._next.loop, **kwargs
             )
-        except Exception:
+        except KeyError:
             raise self.WorkerNotFound
 
     def schedule(self, data, *args, **kwargs) -> asyncio.Task:
@@ -117,7 +135,7 @@ class WorkForce:
             return self.get_worker(data).run_in_thread(
                 *args, loop=self._next.loop, **kwargs
             )
-        except Exception:
+        except KeyError:
             raise self.WorkerNotFound
 
     def worker(self, name):
@@ -129,11 +147,11 @@ class WorkForce:
     def task(self, *eargs, **ekwargs):
         def process(func, **pkwargs):
             def schedule_async(*args, **kwargs):
-                return self.schedule_async(func, args=args, kwargs=kwargs,
+                return self.schedule_async('default', func=func, args=args, kwargs=kwargs,
                                            **pkwargs)
 
             def schedule(*args, **kwargs):
-                return self.schedule(func, args=args, kwargs=kwargs, **pkwargs)
+                return self.schedule('default', func=func, args=args, kwargs=kwargs, **pkwargs)
 
             func.s = {
                 'async': schedule_async,
