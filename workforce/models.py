@@ -94,8 +94,6 @@ class Workspace:
         self.thread.start()
 
 
-# TODO: Retry tasks*
-# TODO: Chain and chord
 class WorkForce:
     _index = 0
     workers = None
