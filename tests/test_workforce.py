@@ -83,7 +83,7 @@ def test_framework():
         async def handle_problem_employee(self, workitem):
             pass
 
-        def write_a_report(self, data):
+        def write_a_report(self, wf, task):
             pass
 
     class Foo:
@@ -118,7 +118,7 @@ def test_framework():
             await asyncio.sleep(1)
             bar.arr.append('test')
 
-        def make_pr(self, task, wf):
+        def make_pr(self, wf, task):
             time.sleep(0.2)
             bar.arr.append('make_pr')
 
@@ -178,4 +178,13 @@ def test_schedule_coro():
     time.sleep(0.5)
     assert f.done()
     assert f.exception() == ex
+
+    def foo():
+        bar.count += 1
+
+    f = workforce.schedule(foo)
+    time.sleep(0.1)
+    assert f.done()
+    assert bar.count == 3
+    assert workforce.workers['default'].pool
 
