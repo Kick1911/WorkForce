@@ -73,7 +73,7 @@ def test_framework():
             callback = getattr(self, workitem.callback, None)
 
             return self.run_coro_async(
-                self[workitem.task](workitem),
+                getattr(self, workitem.task)(workitem),
                 *eargs, callback=callback, **ekwargs
             )
 
