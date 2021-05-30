@@ -16,7 +16,7 @@ def handle_error(task):
         task.print_stack()
 
 
-class Worker:
+class BaseWorker:
     pool = None
 
     def __init__(self, name):
@@ -27,7 +27,7 @@ class Worker:
         task = asyncio.ensure_future(coro, loop=loop)
         task.add_done_callback(handle_error)
         if callback:
-            task.add_done_callback(functools.partial(callback, task, self))
+            task.add_done_callback(functools.partial(callback, self))
         return task
 
     def run_func_async(
@@ -41,7 +41,7 @@ class Worker:
     def run_coro_async(self, coro, callback: Callable = None,
                        timeout: int = 1, loop=None) -> asyncio.Task:
         waited_coro = asyncio.wait_for(coro, timeout=timeout, loop=loop)
-        task = self._wrap_coro(waited_coro, callback, loop=loop)
+        task = self._wrap_coro(waited_coro, callback=callback, loop=loop)
         asyncio.run_coroutine_threadsafe(waited_coro, loop=loop)
         return task
 
@@ -66,18 +66,15 @@ class Worker:
         return self._wrap_coro(coro, callback, loop=loop)
 
 
-class OrganisedWorker(Worker):
+class Worker(BaseWorker):
     def start_workflow(
-        self, args: tuple = None, kwargs: dict = None,
+        self, task, args: tuple = None, kwargs: dict = None,
         *eargs, **ekwargs
     ) -> asyncio.Task:
         return self.run_coro_async(
             self.task(*args, **kwargs),
             *eargs, **ekwargs
         )
-
-    async def task(self, *args, **kwargs):
-        raise NotImplementedError
 
 
 class Workspace:
@@ -111,47 +108,59 @@ class WorkForce:
         self.workspaces = [Workspace() for _ in range(workspaces)]
         self.workers = {'default': Worker('default')}
 
-    def get_worker(self, data):
+    def get_worker(self, task_type):
         return self.workers['default']
 
-    def schedule_workflow(self, data, *args, **kwargs) -> asyncio.Task:
+    def schedule_workflow(self, workitem, *args,
+                          **kwargs) -> asyncio.Task:
         try:
-            return self.get_worker(data).start_workflow(
+            return self.get_worker(workitem).start_workflow(
+                workitem, *args, loop=self._next.loop, **kwargs
+            )
+        except KeyError:
+            raise self.WorkerNotFound
+
+    def schedule_coro(self, *args, task_type=None, **kwargs) -> asyncio.Task:
+        try:
+            return self.get_worker(task_type).run_coro_async(
                 *args, loop=self._next.loop, **kwargs
             )
         except KeyError:
             raise self.WorkerNotFound
 
-    def schedule_async(self, data, *args, **kwargs) -> asyncio.Task:
+    def schedule_async(self, *args, task_type=None, **kwargs) -> asyncio.Task:
         try:
-            return self.get_worker(data).run_func_async(
+            return self.get_worker(task_type).run_func_async(
                 *args, loop=self._next.loop, **kwargs
             )
         except KeyError:
             raise self.WorkerNotFound
 
-    def schedule(self, data, *args, **kwargs) -> asyncio.Task:
+    def schedule(self, *args, task_type=None, **kwargs) -> asyncio.Task:
         try:
-            return self.get_worker(data).run_in_thread(
+            return self.get_worker(task_type).run_in_thread(
                 *args, loop=self._next.loop, **kwargs
             )
         except KeyError:
             raise self.WorkerNotFound
 
-    def worker(self, name):
-        def wrapper(cls):
-            self.workers[name] = cls()
+    def worker(self, *args, **kwargs):
+        def process(cls, **pkwargs):
+            self.workers[pkwargs.get('name', cls.__name__)] = cls(cls.__name__)
             return cls
-        return wrapper
+
+        def wrapper(cls):
+            return process(cls, **kwargs)
+        return process(args[0]) if len(args) > 0 else wrapper
 
     def task(self, *eargs, **ekwargs):
         def process(func, **pkwargs):
             def schedule_async(*args, **kwargs):
-                return self.schedule_async('default', func=func, args=args, kwargs=kwargs,
+                return self.schedule_async(func, args=args, kwargs=kwargs,
                                            **pkwargs)
 
             def schedule(*args, **kwargs):
-                return self.schedule('default', func=func, args=args, kwargs=kwargs, **pkwargs)
+                return self.schedule(func, args=args, kwargs=kwargs, **pkwargs)
 
             func.s = {
                 'async': schedule_async,
@@ -163,6 +172,9 @@ class WorkForce:
             return process(func, **ekwargs)
 
         return process(eargs[0]) if len(eargs) > 0 else wrapper
+
+    def lay_off_worker(self, worker_name):
+        return self.workers.pop(worker_name)
 
     @property
     def _next(self) -> Workspace:
