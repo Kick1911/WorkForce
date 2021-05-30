@@ -165,8 +165,17 @@ def test_schedule_coro():
 
     f1 = workforce.schedule_async(foo)
     f2 = workforce.schedule_async(foo)
-    time.sleep(2)
+    time.sleep(1)
     assert f1.done()
     assert f2.done()
     assert bar.count == 2
+
+    ex = Exception('Error occured')
+    async def foo():
+        raise ex
+
+    f = workforce.schedule_async(foo)
+    time.sleep(0.5)
+    assert f.done()
+    assert f.exception() == ex
 
