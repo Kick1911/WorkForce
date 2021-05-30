@@ -48,7 +48,7 @@ task = add.s(4, 5)
 ```
 
 ## Class-based framework
-Make your own workforce distributes workitems to Workers
+Make your own workforce that distributes workitems to Workers
 ```python
 class Company(WorkForce):
     def get_worker(self, workitem):
