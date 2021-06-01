@@ -5,7 +5,7 @@ description = ""
 authors = ["Caswall Engelsman <mail@cengelsman.com>"]
 
 [tool.poetry.dependencies]
-python = "^3.7"
+python = "^3.6"
 parse = "^1.0"
 
 [tool.poetry.dev-dependencies]
