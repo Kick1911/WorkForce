@@ -159,10 +159,12 @@ class WorkForce:
 
     def task(self, *eargs, **ekwargs):
         def process(func, **pkwargs):
+            function_type = func_type(func)
+
             def schedule(*args, **kwargs):
                 return self.schedule(
                     func, args=args, kwargs=kwargs,
-                    function_type=func_type(func), **pkwargs
+                    function_type=function_type, **pkwargs
                 )
 
             func.s = schedule
