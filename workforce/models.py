@@ -7,6 +7,18 @@ from asyncio import TimeoutError
 from collections.abc import Callable
 
 
+class FunctionType:
+    CORO = 1
+    FUNC_CORO = 2
+    FUNC = 3
+
+
+def func_type(func):
+    return (asyncio.iscoroutine(func) and FunctionType.CORO
+            or asyncio.iscoroutinefunction(func) and FunctionType.FUNC_CORO
+            or FunctionType.FUNC)
+
+
 def handle_error(task):
     try:
         task.result()
@@ -118,29 +130,23 @@ class WorkForce:
         except KeyError:
             raise self.WorkerNotFound
 
-    def schedule_coro(self, *args, task_type=None, **kwargs) -> asyncio.Task:
+    def schedule(self, func, *args, task_type=None, function_type=None,
+                 **kwargs) -> asyncio.Task:
+        """
+        Arguments are not `well-defined` by design. Arguments will change
+        depending on whether `func` is a Callable or a coroutine
+        """
         try:
-            return self.get_worker(task_type).run_coro_async(
-                *args, loop=self._next.loop, **kwargs
-            )
+            worker = self.get_worker(task_type)
         except KeyError:
             raise self.WorkerNotFound
 
-    def schedule_async(self, *args, task_type=None, **kwargs) -> asyncio.Task:
-        try:
-            return self.get_worker(task_type).run_func_async(
-                *args, loop=self._next.loop, **kwargs
-            )
-        except KeyError:
-            raise self.WorkerNotFound
-
-    def schedule(self, *args, task_type=None, **kwargs) -> asyncio.Task:
-        try:
-            return self.get_worker(task_type).run_in_thread(
-                *args, loop=self._next.loop, **kwargs
-            )
-        except KeyError:
-            raise self.WorkerNotFound
+        method = {
+            FunctionType.CORO: worker.run_coro_async,
+            FunctionType.FUNC_CORO: worker.run_func_async,
+            FunctionType.FUNC: worker.run_in_thread,
+        }[function_type or func_type(func)]
+        return method(func, *args, loop=self._next.loop, **kwargs)
 
     def worker(self, *args, **kwargs):
         def process(cls, **pkwargs):
@@ -153,17 +159,15 @@ class WorkForce:
 
     def task(self, *eargs, **ekwargs):
         def process(func, **pkwargs):
-            def schedule_async(*args, **kwargs):
-                return self.schedule_async(func, args=args, kwargs=kwargs,
-                                           **pkwargs)
+            function_type = func_type(func)
 
             def schedule(*args, **kwargs):
-                return self.schedule(func, args=args, kwargs=kwargs, **pkwargs)
+                return self.schedule(
+                    func, args=args, kwargs=kwargs,
+                    function_type=function_type, **pkwargs
+                )
 
-            func.s = {
-                'async': schedule_async,
-                'sync': schedule,
-            }[pkwargs.get('run_type', 'async')]
+            func.s = schedule
             return func
 
         def wrapper(func):
