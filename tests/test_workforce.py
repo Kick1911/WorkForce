@@ -1,6 +1,6 @@
 import time
 import asyncio
-from workforce import __version__, WorkForce, Worker
+from workforce import __version__, WorkForce, Worker, func_type, FunctionType
 
 
 def test_version():
@@ -152,6 +152,19 @@ def test_decorator():
     assert bar.result == 9
 
 
+def test_func_type():
+    def foo():
+        pass
+    async def bar():
+        pass
+
+    coro = bar()
+    assert func_type(foo) == FunctionType.FUNC
+    assert func_type(bar) == FunctionType.FUNC_CORO
+    assert func_type(coro) == FunctionType.CORO
+    coro.close()
+
+
 def test_schedule_coro():
     class Foo:
         count = 0
@@ -163,8 +176,8 @@ def test_schedule_coro():
         await asyncio.sleep(0.8)
         bar.count += 1
 
-    f1 = workforce.schedule_async(foo)
-    f2 = workforce.schedule_async(foo)
+    f1 = workforce.schedule(foo)
+    f2 = workforce.schedule(foo)
     time.sleep(1)
     assert f1.done()
     assert f2.done()
@@ -174,7 +187,7 @@ def test_schedule_coro():
     async def foo():
         raise ex
 
-    f = workforce.schedule_async(foo)
+    f = workforce.schedule(foo)
     time.sleep(0.5)
     assert f.done()
     assert f.exception() == ex
