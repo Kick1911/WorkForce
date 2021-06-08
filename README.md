@@ -21,7 +21,7 @@ async def foo():
     await asyncio.sleep(0.8)
     bar.count += 1
 
-f1 = workforce.schedule_async(foo)
+f1 = workforce.schedule(foo)
 ```
 
 ## Just run normal functions in another thread
@@ -45,6 +45,16 @@ async def add(a, b):
     return a + b
 
 task = add.s(4, 5)
+```
+
+## Create queues of tasks
+```python
+workforce = WorkForce()
+queue = workforce.queue('channel1')
+queue.put_nowait(foo())
+queue.put_nowait(foo())
+queue.put_nowait(foo())
+assert queue.qsize() == 3
 ```
 
 ## Class-based framework

@@ -19,6 +19,14 @@ def func_type(func):
             or FunctionType.FUNC)
 
 
+async def consumer(q):
+    queue = q['queue']
+    while 1:
+        coro = await queue.get()
+        await coro
+        queue.task_done()
+
+
 def handle_error(task):
     try:
         task.result()
@@ -110,13 +118,42 @@ class WorkForce:
     _index = 0
     workers = None
     workspaces = None
+    queues = None
 
     class WorkerNotFound(Exception):
+        pass
+
+    class QueueNotFound(Exception):
         pass
 
     def __init__(self, workspaces=1):
         self.workspaces = [Workspace() for _ in range(workspaces)]
         self.workers = {'default': Worker('default')}
+        self.queues = {}
+
+    def queue(self, key, Queue=asyncio.Queue, **kwargs):
+        loop = self._next.loop
+        queue = Queue(loop=loop, **kwargs)
+
+        self.queues[key] = dict(queue=queue)
+        task = self.get_worker('default').run_coro_async(
+            consumer(self.queues[key]), loop=loop, timeout=None
+        )
+        self.queues[key]['task'] = task
+        return queue
+
+    def unregister_queue(self, key):
+        try:
+            q = self.queues.pop(key)
+            q['task'].cancel()
+        except KeyError:
+            raise self.QueueNotFound
+
+    def get_queue(self, key):
+        try:
+            return self.queues[key]['queue']
+        except KeyError:
+            raise self.QueueNotFound
 
     def get_worker(self, task_type):
         return self.workers['default']

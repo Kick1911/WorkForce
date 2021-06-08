@@ -127,7 +127,7 @@ def test_framework():
     assert bar.arr == ['test']
     time.sleep(1)
     assert bar.arr == ['test', 'code']
-    time.sleep(1)
+    time.sleep(1.2)
     assert bar.arr == ['test', 'code', 'design', 'make_pr']
 
 
@@ -200,4 +200,20 @@ def test_schedule_coro():
     assert f.done()
     assert bar.count == 3
     assert workforce.workers['default'].pool
+
+def test_queue():
+    async def foo():
+        asyncio.sleep(1)
+
+    workforce = WorkForce()
+    queue = workforce.queue('channel1')
+    queue.put_nowait(foo())
+    f = workforce.schedule(foo)
+    queue.put_nowait(foo())
+    queue.put_nowait(foo())
+    assert queue.qsize() == 3
+    time.sleep(3)
+    assert queue.empty()
+    assert f.done()
+    workforce.unregister_queue('channel1')
 
