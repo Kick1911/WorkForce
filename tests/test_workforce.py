@@ -144,12 +144,23 @@ def test_decorator():
     async def add(a, b):
         return a + b
 
-    task = add.s(4, 5)
+    task = add.s(4, 5)()
     time.sleep(0.5)
 
     assert task.done()
     assert task.result() == 9
     assert bar.result == 9
+
+    @workforce.task()
+    async def sleep(sec):
+        await asyncio.sleep(sec)
+
+    workforce.queue('channel1')
+    queue = sleep.q(0.5)('channel1')
+    assert len(queue) == 1
+    time.sleep(0.6)
+    assert not len(queue)
+    workforce.queues.destroy('channel1')
 
 
 def test_func_type():
@@ -207,13 +218,13 @@ def test_queue():
 
     workforce = WorkForce()
     queue = workforce.queue('channel1')
-    queue.put_nowait(foo())
+    queue.put(foo())
     f = workforce.schedule(foo)
-    queue.put_nowait(foo())
-    queue.put_nowait(foo())
-    assert queue.qsize() == 3
+    queue.put(foo())
+    queue.put(foo())
+    assert len(queue) == 3
     time.sleep(3)
-    assert queue.empty()
+    assert not len(queue)
     assert f.done()
-    workforce.unregister_queue('channel1')
+    workforce.queues.destroy('channel1')
 

@@ -19,14 +19,6 @@ def func_type(func):
             or FunctionType.FUNC)
 
 
-async def consumer(q):
-    queue = q['queue']
-    while 1:
-        coro = await queue.get()
-        await coro
-        queue.task_done()
-
-
 def handle_error(task):
     try:
         task.result()
@@ -34,6 +26,60 @@ def handle_error(task):
         print('TimeoutError:', task)
     except Exception:
         task.print_stack()
+
+
+class Queue:
+    raw_queue = None
+    task = None
+
+    def __init__(self, loop=None, Queue=asyncio.Queue, **kwargs):
+        self.raw_queue = Queue(loop=loop, **kwargs)
+
+        coro = self.consumer()
+        self.task = asyncio.ensure_future(coro, loop=loop)
+        asyncio.run_coroutine_threadsafe(coro, loop=loop)
+
+    async def consumer(self):
+        while 1:
+            coro = await self.raw_queue.get()
+            await coro
+            self.raw_queue.task_done()
+
+    def __len__(self):
+        return self.raw_queue.qsize()
+
+    def put(self, item):
+        self.raw_queue.put_nowait(item)
+
+    def destroy(self):
+        self.task.cancel()
+
+
+class QueueManager:
+    queues = None
+
+    class QueueNotFound(Exception):
+        pass
+
+    def __init__(self):
+        self.queues = {}
+
+    def create(self, key, loop=None, **kwargs):
+        self.queues[key] = Queue(loop=loop, **kwargs)
+        return self.queues[key]
+
+    def get(self, key):
+        try:
+            return self.queues[key]
+        except KeyError:
+            raise self.QueueNotFound
+
+    def destroy(self, key):
+        try:
+            q = self.queues.pop(key)
+            q.destroy()
+        except KeyError:
+            raise self.QueueNotFound
 
 
 class BaseWorker:
@@ -118,42 +164,17 @@ class WorkForce:
     _index = 0
     workers = None
     workspaces = None
-    queues = None
+    queues = QueueManager()
 
     class WorkerNotFound(Exception):
-        pass
-
-    class QueueNotFound(Exception):
         pass
 
     def __init__(self, workspaces=1):
         self.workspaces = [Workspace() for _ in range(workspaces)]
         self.workers = {'default': Worker('default')}
-        self.queues = {}
 
-    def queue(self, key, Queue=asyncio.Queue, **kwargs):
-        loop = self._next.loop
-        queue = Queue(loop=loop, **kwargs)
-
-        self.queues[key] = dict(queue=queue)
-        task = self.get_worker('default').run_coro_async(
-            consumer(self.queues[key]), loop=loop, timeout=None
-        )
-        self.queues[key]['task'] = task
-        return queue
-
-    def unregister_queue(self, key):
-        try:
-            q = self.queues.pop(key)
-            q['task'].cancel()
-        except KeyError:
-            raise self.QueueNotFound
-
-    def get_queue(self, key):
-        try:
-            return self.queues[key]['queue']
-        except KeyError:
-            raise self.QueueNotFound
+    def queue(self, key):
+        return self.queues.create(key, loop=self._next.loop)
 
     def get_worker(self, task_type):
         return self.workers['default']
@@ -199,12 +220,21 @@ class WorkForce:
             function_type = func_type(func)
 
             def schedule(*args, **kwargs):
-                return self.schedule(
+                return functools.partial(
+                    self.schedule,
                     func, args=args, kwargs=kwargs,
                     function_type=function_type, **pkwargs
                 )
 
+            def queue(*args, **kwargs):
+                def run(key):
+                    q = self.queues.get(key)
+                    q.put(func(*args, **kwargs))
+                    return q
+                return run
+
             func.s = schedule
+            func.q = queue
             return func
 
         def wrapper(func):
