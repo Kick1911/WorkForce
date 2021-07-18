@@ -82,14 +82,78 @@ class QueueManager:
             raise self.QueueNotFound
 
 
+class Wrapper:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def wrap(self, func, *args, **kwargs):
+        # Check what type of function it is here ??
+        return await func(*args, **kwargs)
+
+
+class RetryWrapper(Wrapper):
+    def __init__(self, retries, cooldown=0, *args, **kwargs):
+        self.retries = retries
+        self.cooldown = cooldown
+        super().__init__(*args, **kwargs)
+
+    async def wrap(self, func, *args, **kwargs):
+        ex = None
+        retries = self.retries
+        for _ in range(retries):
+            try:
+                return await super().wrap(func, *args, **kwargs)
+            except Exception as e:
+                ex = e
+                if self.cooldown:
+                    await asyncio.sleep(self.cooldown)
+        raise ex
+
+
+class TimeoutWrapper(Wrapper):
+    def __init__(self, timeout, *args, **kwargs):
+        self.timeout = timeout
+        super().__init__(*args, **kwargs)
+
+    async def wrap(self, func, *args, **kwargs):
+        coro = super().wrap(func, *args, **kwargs)
+        await asyncio.wait_for(coro, timeout=self.timeout)
+        return coro
+
+
+class ExecutorWrapper:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def wrap(self, func, loop, *args, pool=None, **kwargs):
+        return await loop.run_in_executor(
+            pool,
+            functools.partial(
+                func, *(args or ()), **(kwargs or {})
+            )
+        )
+
+
+class ExecutorTimeoutWrapper(ExecutorWrapper):
+    def __init__(self, timeout, *args, **kwargs):
+        self.timeout = timeout
+        super().__init__(*args, **kwargs)
+
+    async def wrap(self, func, *args, **kwargs):
+        return await asyncio.wait_for(
+            super().wrap(func, *args, **kwargs),
+            timeout=self.timeout
+        )
+
+
 class BaseWorker:
     pool = None
 
     def __init__(self, name):
         self.name = name
 
-    def _wrap_coro(self, coro, callback: Callable = None,
-                   loop=None) -> asyncio.Task:
+    def _create_task(self, coro, callback: Callable = None,
+                     loop=None) -> asyncio.Task:
         task = asyncio.ensure_future(coro, loop=loop)
         task.add_done_callback(handle_error)
         if callback:
@@ -98,38 +162,29 @@ class BaseWorker:
 
     def run_func_async(
         self, func: Callable, args: tuple = None, kwargs: dict = None,
-        *eargs, **ekwargs
+        *eargs, wrapper=TimeoutWrapper(1), **ekwargs
     ) -> asyncio.Task:
-        return self.run_coro_async(
-            func(*(args or ()), **(kwargs or {})), *eargs, **ekwargs
-        )
+        coro = wrapper.wrap(func, *(args or ()), **(kwargs or {}))
+        return self.run_coro_async(coro, *eargs, **ekwargs)
 
     def run_coro_async(self, coro, callback: Callable = None,
-                       timeout: int = 1, loop=None) -> asyncio.Task:
-        waited_coro = asyncio.wait_for(coro, timeout=timeout, loop=loop)
-        task = self._wrap_coro(waited_coro, callback=callback, loop=loop)
-        asyncio.run_coroutine_threadsafe(waited_coro, loop=loop)
+                       loop=None) -> asyncio.Task:
+        task = self._create_task(coro, callback=callback, loop=loop)
+        asyncio.run_coroutine_threadsafe(coro, loop=loop)
         return task
 
     def run_in_thread(
-        self, func: Callable, args: tuple = None, kwargs: dict = None,
-        callback: Callable = None, timeout: int = 1, loop=None
+        self, func, args: tuple = None, kwargs: dict = None,
+        callback: Callable = None, loop=None, wrapper=ExecutorTimeoutWrapper(1)
     ) -> asyncio.Task:
         if not self.pool:
             self.pool = concurrent.futures.ThreadPoolExecutor(
                 max_workers=1
             )
 
-        coro = asyncio.wait_for(
-            loop.run_in_executor(
-                self.pool,
-                functools.partial(
-                    func, *(args or ()), **(kwargs or {})
-                )
-            ),
-            timeout=timeout, loop=loop
-        )
-        return self._wrap_coro(coro, callback, loop=loop)
+        coro = wrapper.wrap(func, loop=loop, pool=self.pool,
+                            *(args or ()), **(kwargs or {}))
+        return self.run_coro_async(coro, callback=callback, loop=loop)
 
 
 class Worker(BaseWorker):
