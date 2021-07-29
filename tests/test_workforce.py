@@ -214,7 +214,7 @@ def test_schedule_coro():
     f = workforce.schedule(foo, wrapper=RetryWrapper(4))
     time.sleep(0.5)
     assert f.done()
-    assert bar.count == 7
+    assert bar.count == 8
     assert f.exception() == ex
 
     def foo():
@@ -223,7 +223,7 @@ def test_schedule_coro():
     f = workforce.schedule(foo)
     time.sleep(0.1)
     assert f.done()
-    assert bar.count == 8
+    assert bar.count == 9
     assert workforce.workers['default'].pool
 
     async def foo():
@@ -233,6 +233,17 @@ def test_schedule_coro():
     time.sleep(1.2)
     assert f.done()
     assert isinstance(f.exception(), asyncio.TimeoutError)
+
+    def foo():
+        bar.count += 1
+        raise ex
+
+    f = workforce.schedule(foo, wrapper=RetryWrapper(1))
+    time.sleep(0.5)
+    assert f.done()
+    assert f.exception() == ex
+    assert bar.count == 11
+
 
 def test_queue():
     async def foo():

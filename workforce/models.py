@@ -86,9 +86,19 @@ class Wrapper:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def wrap(self, func, *args, **kwargs):
-        # Check what type of function it is here ??
-        return await func(*args, **kwargs)
+    async def wrap(self, func, *args, worker=None, **kwargs):
+        function_type = func_type(func)
+        if function_type == FunctionType.FUNC_CORO:
+            return await func(*args, **kwargs)
+
+        elif function_type == FunctionType.FUNC:
+            if not worker.pool:
+                worker.pool = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1
+                )
+            return await asyncio.get_event_loop().run_in_executor(
+                worker.pool, functools.partial(func, *args, **kwargs)
+            )
 
 
 class RetryWrapper(Wrapper):
@@ -99,7 +109,7 @@ class RetryWrapper(Wrapper):
 
     async def wrap(self, func, *args, **kwargs):
         ex = None
-        retries = self.retries
+        retries = self.retries + 1
         for _ in range(retries):
             try:
                 return await super().wrap(func, *args, **kwargs)
@@ -121,31 +131,6 @@ class TimeoutWrapper(Wrapper):
         return coro
 
 
-class ExecutorWrapper:
-    def __init__(self, *args, **kwargs):
-        pass
-
-    async def wrap(self, func, loop, *args, pool=None, **kwargs):
-        return await loop.run_in_executor(
-            pool,
-            functools.partial(
-                func, *(args or ()), **(kwargs or {})
-            )
-        )
-
-
-class ExecutorTimeoutWrapper(ExecutorWrapper):
-    def __init__(self, timeout, *args, **kwargs):
-        self.timeout = timeout
-        super().__init__(*args, **kwargs)
-
-    async def wrap(self, func, *args, **kwargs):
-        return await asyncio.wait_for(
-            super().wrap(func, *args, **kwargs),
-            timeout=self.timeout
-        )
-
-
 class BaseWorker:
     pool = None
 
@@ -164,7 +149,7 @@ class BaseWorker:
         self, func: Callable, args: tuple = None, kwargs: dict = None,
         *eargs, wrapper=TimeoutWrapper(1), **ekwargs
     ) -> asyncio.Task:
-        coro = wrapper.wrap(func, *(args or ()), **(kwargs or {}))
+        coro = wrapper.wrap(func, *(args or ()), **(kwargs or {}), worker=self)
         return self.run_coro_async(coro, *eargs, **ekwargs)
 
     def run_coro_async(self, coro, callback: Callable = None,
@@ -172,19 +157,6 @@ class BaseWorker:
         task = self._create_task(coro, callback=callback, loop=loop)
         asyncio.run_coroutine_threadsafe(coro, loop=loop)
         return task
-
-    def run_in_thread(
-        self, func, args: tuple = None, kwargs: dict = None,
-        callback: Callable = None, loop=None, wrapper=ExecutorTimeoutWrapper(1)
-    ) -> asyncio.Task:
-        if not self.pool:
-            self.pool = concurrent.futures.ThreadPoolExecutor(
-                max_workers=1
-            )
-
-        coro = wrapper.wrap(func, loop=loop, pool=self.pool,
-                            *(args or ()), **(kwargs or {}))
-        return self.run_coro_async(coro, callback=callback, loop=loop)
 
 
 class Worker(BaseWorker):
@@ -243,7 +215,7 @@ class WorkForce:
         except KeyError:
             raise self.WorkerNotFound
 
-    def schedule(self, func, *args, task_type=None, function_type=None,
+    def schedule(self, func, *args, task_type=None,
                  **kwargs) -> asyncio.Task:
         """
         Arguments are not `well-defined` by design. Arguments will change
@@ -253,13 +225,8 @@ class WorkForce:
             worker = self.get_worker(task_type)
         except KeyError:
             raise self.WorkerNotFound
-
-        method = {
-            FunctionType.CORO: worker.run_coro_async,
-            FunctionType.FUNC_CORO: worker.run_func_async,
-            FunctionType.FUNC: worker.run_in_thread,
-        }[function_type or func_type(func)]
-        return method(func, *args, loop=self._next.loop, **kwargs)
+        return worker.run_func_async(func, *args, loop=self._next.loop,
+                                     **kwargs)
 
     def worker(self, *args, **kwargs):
         def process(cls, **pkwargs):
