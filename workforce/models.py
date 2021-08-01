@@ -86,19 +86,19 @@ class Wrapper:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def wrap(self, func, *args, worker=None, **kwargs):
+    async def run(self, func, *args, **kwargs):
         function_type = func_type(func)
         if function_type == FunctionType.FUNC_CORO:
-            return await func(*args, **kwargs)
+            return await asyncio.ensure_future(func(*args, **kwargs))
 
         elif function_type == FunctionType.FUNC:
-            if not worker.pool:
-                worker.pool = concurrent.futures.ThreadPoolExecutor(
-                    max_workers=1
-                )
             return await asyncio.get_event_loop().run_in_executor(
-                worker.pool, functools.partial(func, *args, **kwargs)
+                None, functools.partial(func, *args, **kwargs)
             )
+
+    async def wrap(self, *args, **kwargs):
+        task = asyncio.ensure_future(self.run(*args, **kwargs))
+        return await task
 
 
 class RetryWrapper(Wrapper):
@@ -107,12 +107,12 @@ class RetryWrapper(Wrapper):
         self.cooldown = cooldown
         super().__init__(*args, **kwargs)
 
-    async def wrap(self, func, *args, **kwargs):
+    async def run(self, func, *args, **kwargs):
         ex = None
         retries = self.retries + 1
         for _ in range(retries):
             try:
-                return await super().wrap(func, *args, **kwargs)
+                return await super().run(func, *args, **kwargs)
             except Exception as e:
                 ex = e
                 if self.cooldown:
@@ -125,8 +125,8 @@ class TimeoutWrapper(Wrapper):
         self.timeout = timeout
         super().__init__(*args, **kwargs)
 
-    async def wrap(self, func, *args, **kwargs):
-        coro = super().wrap(func, *args, **kwargs)
+    async def run(self, func, *args, **kwargs):
+        coro = super().run(func, *args, **kwargs)
         await asyncio.wait_for(coro, timeout=self.timeout)
         return coro
 
@@ -149,7 +149,8 @@ class BaseWorker:
         self, func: Callable, args: tuple = None, kwargs: dict = None,
         *eargs, wrapper=TimeoutWrapper(1), **ekwargs
     ) -> asyncio.Task:
-        coro = wrapper.wrap(func, *(args or ()), **(kwargs or {}), worker=self)
+        coro = (wrapper.wrap(func, *(args or ()), **(kwargs or {}))
+                if wrapper else func(*(args or ()), **(kwargs or {})))
         return self.run_coro_async(coro, *eargs, **ekwargs)
 
     def run_coro_async(self, coro, callback: Callable = None,

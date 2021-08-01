@@ -224,7 +224,7 @@ def test_schedule_coro():
     time.sleep(0.1)
     assert f.done()
     assert bar.count == 9
-    assert workforce.workers['default'].pool
+    # assert workforce.workers['default'].pool
 
     async def foo():
         await asyncio.sleep(2)
@@ -238,11 +238,17 @@ def test_schedule_coro():
         bar.count += 1
         raise ex
 
-    f = workforce.schedule(foo, wrapper=RetryWrapper(1))
+    f = workforce.schedule(foo, wrapper=RetryWrapper(3))
     time.sleep(0.5)
     assert f.done()
     assert f.exception() == ex
-    assert bar.count == 11
+    assert bar.count == 13
+
+    f = workforce.schedule(foo, wrapper=RetryWrapper(2))
+    time.sleep(0.5)
+    assert f.done()
+    assert f.exception() == ex
+    assert bar.count == 16
 
 
 def test_queue():
