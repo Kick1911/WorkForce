@@ -1,6 +1,9 @@
 import time
 import asyncio
-from workforce import __version__, WorkForce, Worker, func_type, FunctionType
+from workforce import (
+    __version__, WorkForce, Worker, func_type, FunctionType, TimeoutWrapper,
+    RetryWrapper
+)
 
 
 def test_version():
@@ -92,18 +95,21 @@ def test_framework():
 
     @company.worker
     class Developer(Worker):
-        def start_workflow(self, workitem, *eargs, **ekwargs):
+        def start_workflow(self, workitem, *args, **kwargs):
             callback = getattr(self, workitem.callback, None)
 
             # All tasks here run concurrent
-            coros = [self.run_coro_async(
-                        getattr(self, task_name)(workitem),
-                        *eargs, timeout=3.2, **ekwargs
-                    ) for task_name in workitem.tasks]
+            coros = (getattr(self, task_name)(workitem)
+                     for task_name in workitem.tasks)
+
+            # Hack because asyncio.gather is not recognised as a coroutine
+            # Only tested on Py 3.6
+            async def gather(*aws, **kwargs):
+                return await asyncio.gather(*aws, **kwargs)
 
             return self.run_coro_async(
-                asyncio.gather(*coros, loop=ekwargs['loop']),
-                *eargs, callback=callback, timeout=3.2, **ekwargs
+                gather(*coros, loop=kwargs['loop']),
+                *args, callback=callback, **kwargs
             )
 
         async def design(self, workitem):
@@ -183,6 +189,32 @@ def test_schedule_coro():
 
     workforce = WorkForce()
 
+    async def add(a, b):
+        return a + b
+
+    f = workforce.schedule(add, args=(4, 2))
+    time.sleep(0.2)
+    assert f.done()
+    assert f.result() == 6
+
+    f = workforce.schedule(add, args=(4, 2), wrapper=RetryWrapper(1))
+    time.sleep(0.2)
+    assert f.done()
+    assert f.result() == 6
+
+    def add(a, b):
+        return a + b
+
+    f = workforce.schedule(add, args=(4, 2))
+    time.sleep(0.2)
+    assert f.done()
+    assert f.result() == 6
+
+    f = workforce.schedule(add, args=(4, 2), wrapper=RetryWrapper(1))
+    time.sleep(0.2)
+    assert f.done()
+    assert f.result() == 6
+
     async def foo():
         await asyncio.sleep(0.8)
         bar.count += 1
@@ -196,11 +228,19 @@ def test_schedule_coro():
 
     ex = Exception('Error occured')
     async def foo():
+        bar.count += 1
         raise ex
 
     f = workforce.schedule(foo)
     time.sleep(0.5)
     assert f.done()
+    assert bar.count == 3
+    assert f.exception() == ex
+
+    f = workforce.schedule(foo, wrapper=RetryWrapper(4))
+    time.sleep(0.5)
+    assert f.done()
+    assert bar.count == 8
     assert f.exception() == ex
 
     def foo():
@@ -209,12 +249,37 @@ def test_schedule_coro():
     f = workforce.schedule(foo)
     time.sleep(0.1)
     assert f.done()
-    assert bar.count == 3
-    assert workforce.workers['default'].pool
+    assert bar.count == 9
+    # assert workforce.workers['default'].pool
+
+    async def foo():
+        await asyncio.sleep(2)
+
+    f = workforce.schedule(foo, wrapper=TimeoutWrapper(1))
+    time.sleep(1.2)
+    assert f.done()
+    assert type(f.exception()) == asyncio.TimeoutError
+
+    def foo():
+        bar.count += 1
+        raise ex
+
+    f = workforce.schedule(foo, wrapper=RetryWrapper(3))
+    time.sleep(0.5)
+    assert f.done()
+    assert f.exception() == ex
+    assert bar.count == 13
+
+    f = workforce.schedule(foo, wrapper=RetryWrapper(2))
+    time.sleep(0.5)
+    assert f.done()
+    assert f.exception() == ex
+    assert bar.count == 16
+
 
 def test_queue():
     async def foo():
-        asyncio.sleep(1)
+        await asyncio.sleep(1)
 
     workforce = WorkForce()
     queue = workforce.queue('channel1')
