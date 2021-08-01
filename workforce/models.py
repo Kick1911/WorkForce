@@ -33,7 +33,7 @@ class Queue:
     task = None
 
     def __init__(self, loop=None, Queue=asyncio.Queue, **kwargs):
-        self.raw_queue = Queue(loop=loop, **kwargs)
+        self.raw_queue = Queue(**kwargs)
 
         coro = self.consumer()
         self.task = asyncio.ensure_future(coro, loop=loop)
@@ -126,9 +126,10 @@ class TimeoutWrapper(Wrapper):
         super().__init__(*args, **kwargs)
 
     async def run(self, func, *args, **kwargs):
-        coro = super().run(func, *args, **kwargs)
-        await asyncio.wait_for(coro, timeout=self.timeout)
-        return coro
+        return await asyncio.wait_for(
+            super().run(func, *args, **kwargs),
+            timeout=self.timeout
+        )
 
 
 class BaseWorker:
@@ -240,13 +241,10 @@ class WorkForce:
 
     def task(self, *eargs, **ekwargs):
         def process(func, **pkwargs):
-            function_type = func_type(func)
-
             def schedule(*args, **kwargs):
                 return functools.partial(
-                    self.schedule,
-                    func, args=args, kwargs=kwargs,
-                    function_type=function_type, **pkwargs
+                    self.schedule, func, args=args, kwargs=kwargs,
+                    **pkwargs
                 )
 
             def queue(*args, **kwargs):

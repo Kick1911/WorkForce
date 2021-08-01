@@ -109,7 +109,7 @@ def test_framework():
 
             return self.run_coro_async(
                 gather(*coros, loop=kwargs['loop']),
-                *args, callback=callback, wrapper=None, **kwargs
+                *args, callback=callback, **kwargs
             )
 
         async def design(self, workitem):
@@ -189,6 +189,32 @@ def test_schedule_coro():
 
     workforce = WorkForce()
 
+    async def add(a, b):
+        return a + b
+
+    f = workforce.schedule(add, args=(4, 2))
+    time.sleep(0.2)
+    assert f.done()
+    assert f.result() == 6
+
+    f = workforce.schedule(add, args=(4, 2), wrapper=RetryWrapper(1))
+    time.sleep(0.2)
+    assert f.done()
+    assert f.result() == 6
+
+    def add(a, b):
+        return a + b
+
+    f = workforce.schedule(add, args=(4, 2))
+    time.sleep(0.2)
+    assert f.done()
+    assert f.result() == 6
+
+    f = workforce.schedule(add, args=(4, 2), wrapper=RetryWrapper(1))
+    time.sleep(0.2)
+    assert f.done()
+    assert f.result() == 6
+
     async def foo():
         await asyncio.sleep(0.8)
         bar.count += 1
@@ -253,7 +279,7 @@ def test_schedule_coro():
 
 def test_queue():
     async def foo():
-        asyncio.sleep(1)
+        await asyncio.sleep(1)
 
     workforce = WorkForce()
     queue = workforce.queue('channel1')
