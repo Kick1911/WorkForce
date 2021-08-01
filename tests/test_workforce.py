@@ -258,7 +258,7 @@ def test_schedule_coro():
     f = workforce.schedule(foo, wrapper=TimeoutWrapper(1))
     time.sleep(1.2)
     assert f.done()
-    assert isinstance(f.exception(), asyncio.TimeoutError)
+    assert type(f.exception()) == asyncio.TimeoutError
 
     def foo():
         bar.count += 1
