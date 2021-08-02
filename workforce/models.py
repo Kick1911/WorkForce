@@ -219,10 +219,6 @@ class WorkForce:
 
     def schedule(self, func, *args, task_type=None,
                  **kwargs) -> asyncio.Task:
-        """
-        Arguments are not `well-defined` by design. Arguments will change
-        depending on whether `func` is a Callable or a coroutine
-        """
         try:
             worker = self.get_worker(task_type)
         except KeyError:

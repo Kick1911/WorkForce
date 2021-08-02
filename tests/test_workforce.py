@@ -34,25 +34,34 @@ def test_workers():
 
 
 def test_framework():
+    class Foo:
+        arr = []
+    bar = Foo()
 
     # You can make a Task Factory as well
     class NewFeature:
         tasks = ['design', 'code', 'test']
         requirements = ['scalable', 'flexable']
-        callback = 'make_pr'
 
         def __init__(self, name):
             self.name = name
 
+        def callback(self, wf, task):
+            """ make_pr """
+            time.sleep(0.2)
+            bar.arr.append('make_pr')
+
     class Hire:
         platform = 'linkedin'
         task = 'hire_new_talent'
-        callback = 'None'
 
     class EmployeeCounseling:
         problem_employee = 'john'
         task = 'handle_problem_employee'
-        callback = 'write_a_report'
+
+        def callback(self, wf, task):
+            """ write_a_report """
+            pass
 
     class Company(WorkForce):
         def get_worker(self, workitem):
@@ -86,17 +95,10 @@ def test_framework():
         async def handle_problem_employee(self, workitem):
             pass
 
-        def write_a_report(self, wf, task):
-            pass
-
-    class Foo:
-        arr = []
-    bar = Foo()
-
     @company.worker
     class Developer(Worker):
         def start_workflow(self, workitem, *args, **kwargs):
-            callback = getattr(self, workitem.callback, None)
+            callback = getattr(workitem, 'callback', None)
 
             # All tasks here run concurrent
             coros = (getattr(self, task_name)(workitem)
@@ -123,10 +125,6 @@ def test_framework():
         async def test(self, workitem):
             await asyncio.sleep(1)
             bar.arr.append('test')
-
-        def make_pr(self, wf, task):
-            time.sleep(0.2)
-            bar.arr.append('make_pr')
 
     company.schedule_workflow(NewFeature('New trendy ML'))
     time.sleep(1.2)
