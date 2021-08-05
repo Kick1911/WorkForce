@@ -1,7 +1,7 @@
 [tool.poetry]
-name = "workforce"
+name = "workforce-async"
 version = "0.9.0"
-description = ""
+description = "Asyncio Wrapper"
 authors = ["Caswall Engelsman <mail@cengelsman.com>"]
 
 [tool.poetry.dependencies]

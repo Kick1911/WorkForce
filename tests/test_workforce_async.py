@@ -1,6 +1,6 @@
 import time
 import asyncio
-from workforce import (
+from workforce_async import (
     __version__, WorkForce, Worker, func_type, FunctionType, TimeoutWrapper,
     RetryWrapper
 )
