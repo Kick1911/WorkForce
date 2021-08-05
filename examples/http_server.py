@@ -1,6 +1,6 @@
 import asyncio
 from parse import parse
-from workforce import WorkForce, Worker
+from workforce_async import WorkForce, Worker
 
 
 class HTTPRequest:
