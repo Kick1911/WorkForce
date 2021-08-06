@@ -122,7 +122,7 @@ server = Server()
 
 @server.worker(name='/')
 class Root(Worker):
-    async def response_handling(self, request):
+    async def handle_workitem(self, request, *args, **kwargs):
         try:
             func = getattr(self, request.method.lower())
             p = parse(self.name, request.path)
@@ -134,16 +134,6 @@ class Root(Worker):
             payload, status = '<strong>Something went wrong</strong>', 500
         await respond(request, payload, status)
         request.writer.close()
-
-    # Override
-    def start_workflow(self, request, **kwargs):
-        async def wrapper():
-            await self.response_handling(request)
-
-        self.run_coro_async(
-            wrapper(),
-            **kwargs
-        )
 
     async def get(self, request):
         return (f"""

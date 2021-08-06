@@ -133,8 +133,6 @@ class TimeoutWrapper(Wrapper):
 
 
 class BaseWorker:
-    pool = None
-
     def __init__(self, name):
         self.name = name
 
@@ -162,14 +160,25 @@ class BaseWorker:
 
 
 class Worker(BaseWorker):
+    async def handle_workitem(*args, **kwargs):
+        """
+        @returns: coroutine or tuple(coroutine, callback)
+        Can also use the wrappers yourself to add behaviour to your tasks
+        """
+        raise NotImplementedError
+
     def start_workflow(
         self, task, args: tuple = None, kwargs: dict = None,
         *eargs, **ekwargs
     ) -> asyncio.Task:
-        return self.run_coro_async(
-            self.task(*args, **kwargs),
-            *eargs, **ekwargs
-        )
+        ret = self.handle_workitem(task, *(args or ()), **(kwargs or {}))
+
+        if type(ret) != tuple:
+            coro = ret
+        else:
+            coro, ekwargs['callback'] = ret
+
+        return self.run_coro_async(coro, *eargs, **ekwargs)
 
 
 class Workspace:

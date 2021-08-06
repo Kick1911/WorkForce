@@ -69,25 +69,22 @@ def test_framework():
             You could make this conditional-less by attaching a worker name
             to a task or the worker itself
             """
-            if isinstance(workitem, NewFeature):
-                return self.workers['Developer']
-            elif (isinstance(workitem, Hire)
-                  or isinstance(workitem, EmployeeCounseling)):
-                return self.workers['HR']
-            else:
+            try:
+                return {
+                    'NewFeature': self.workers['Developer'],
+                    'Hire': self.workers['HR'],
+                    'EmployeeCounseling': self.workers['HR']
+                }[type(workitem).__name__]
+            except KeyError:
                 raise self.WorkerNotFound
 
     company = Company()
 
     @company.worker
     class HR(Worker):
-        def start_workflow(self, workitem, *eargs, **ekwargs):
+        def handle_workitem(self, workitem, *args, **kwargs):
             callback = getattr(self, workitem.callback, None)
-
-            return self.run_coro_async(
-                getattr(self, workitem.task)(workitem),
-                *eargs, callback=callback, **ekwargs
-            )
+            return getattr(self, workitem.task)(workitem), callback
 
         async def hire_new_talent(self, workitem):
             pass
@@ -97,7 +94,7 @@ def test_framework():
 
     @company.worker
     class Developer(Worker):
-        def start_workflow(self, workitem, *args, **kwargs):
+        def handle_workitem(self, workitem, *args, **kwargs):
             callback = getattr(workitem, 'callback', None)
 
             # All tasks here run concurrent
@@ -105,14 +102,10 @@ def test_framework():
                      for task_name in workitem.tasks)
 
             # Hack because asyncio.gather is not recognised as a coroutine
-            # Only tested on Py 3.6
             async def gather(*aws, **kwargs):
                 return await asyncio.gather(*aws, **kwargs)
 
-            return self.run_coro_async(
-                gather(*coros, loop=kwargs['loop']),
-                *args, callback=callback, **kwargs
-            )
+            return gather(*coros), callback
 
         async def design(self, workitem):
             await asyncio.sleep(3)
