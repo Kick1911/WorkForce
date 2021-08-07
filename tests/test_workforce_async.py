@@ -7,7 +7,7 @@ from workforce_async import (
 
 
 def test_version():
-    assert __version__ == '0.1.0'
+    assert __version__ == '0.9.0'
 
 
 def test_workers():
@@ -18,19 +18,19 @@ def test_workers():
         pass
 
     assert len(workforce.workers) == 2
-    assert isinstance(workforce.workers['Dev'], Dev)
+    assert isinstance(workforce.workers['dev']['.'], Dev)
 
     @workforce.worker(name='programmer')
     class Developer(Worker):
         pass
 
     assert len(workforce.workers) == 3
-    assert 'Developer' not in workforce.workers
-    assert isinstance(workforce.workers['programmer'], Developer)
+    assert 'developer' not in workforce.workers
+    assert isinstance(workforce.workers['programmer']['.'], Developer)
 
-    workforce.lay_off_worker('Dev')
+    workforce.lay_off_worker('dev')
     assert len(workforce.workers) == 2
-    assert 'Dev' not in workforce.workers
+    assert 'dev' not in workforce.workers
 
 
 def test_framework():
@@ -70,11 +70,13 @@ def test_framework():
             to a task or the worker itself
             """
             try:
-                return {
-                    'NewFeature': self.workers['Developer'],
-                    'Hire': self.workers['HR'],
-                    'EmployeeCounseling': self.workers['HR']
+                worker_name = {
+                    'NewFeature': 'developer',
+                    'Hire': 'hr',
+                    'EmployeeCounseling': 'hr'
                 }[type(workitem).__name__]
+
+                return super().get_worker(worker_name)
             except KeyError:
                 raise self.WorkerNotFound
 

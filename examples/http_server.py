@@ -58,31 +58,10 @@ Content-Length: {len(payload)}
 
 
 class Server(WorkForce):
+    worker_name_delimiter = '/'
 
-    # Override
     def get_worker(self, request):
-        w = self.workers
-        path = request.path.split('/')
-        for p in path[1:]:
-            try:
-                w = w[p]
-            except KeyError:
-                w = w['_']
-        return w['/']
-
-    # Override
-    def worker(self, name):
-        def wrapper(cls):
-            print('Loading Worker: ', name)
-            path = name.split('/')
-            w = self.workers
-            for p in path[1:]:
-                x = '_' if p.startswith('{') else p
-                w[x] = {}
-                w = w[x]
-            w['/'] = cls(name)
-            return cls
-        return wrapper
+        return super().get_worker(request.path)
 
     async def handle_request(self, reader, writer):
         data = bytearray()
