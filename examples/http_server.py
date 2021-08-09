@@ -1,9 +1,14 @@
+import json
 import asyncio
+import traceback
 from parse import parse
 from workforce_async import WorkForce, Worker
 
 
 class HTTPRequest:
+    class ParsePayloadError(Exception):
+        pass
+
     def __init__(self, method, path, version, headers, payload, writer=None):
         self.method = method
         self.path = path
@@ -11,6 +16,17 @@ class HTTPRequest:
         self.headers = headers
         self.payload = payload
         self.writer = writer
+
+    @staticmethod
+    def parse_payload(content_type, payload) -> dict:
+        try:
+            func = {
+                # 'application/x-www-form-urlencoded': None,
+                'application/json': json.loads,
+            }[content_type]
+        except KeyError:
+            raise HTTPRequest.ParsePayloadError('Content Type not supported')
+        return func(payload)
 
     @classmethod
     def parse(cls, raw):
@@ -28,17 +44,23 @@ class HTTPRequest:
             i += 1
         payload = ''.join(lines[i:])
 
+        if payload:
+            payload = HTTPRequest.parse_payload(
+                headers.get('Content-Type'), payload
+            )
+
         return cls(method, path, version, headers, payload)
 
     def __str__(self):
         return '\n'.join([f'{self.method} {self.path} {self.version}',
-                          str(self.headers), self.payload])
+                          str(self.headers), str(self.payload)])
 
 
 async def respond(request, payload, status):
     codes_map = {
         200: 'OK',
         201: 'Created',
+        204: 'Deleted',
         400: 'Bad Request',
         404: 'Not Found',
         500: 'Internal Server Error'
@@ -46,6 +68,7 @@ async def respond(request, payload, status):
     response = f"""
 HTTP/1.1 {status} {codes_map[status]}
 Referrer-Policy: no-referrer
+Connection: close
 Content-Type: text/html; charset=UTF-8
 Content-Length: {len(payload)}
 
@@ -53,6 +76,7 @@ Content-Length: {len(payload)}
     """
 
     request.writer.write(response.encode())
+    request.writer.write_eof()
     await request.writer.drain()
     print(f'{request.method} {request.path} {status}')
 
@@ -75,7 +99,15 @@ class Server(WorkForce):
         addr = writer.get_extra_info('peername')
         # print(f"Received {message!r} from {addr!r}")
 
-        request = HTTPRequest.parse(data.decode())
+        try:
+            # TODO: Processing should not be done here
+            request = HTTPRequest.parse(data.decode())
+        except Exception:
+            traceback.print_exc()
+            writer.close()
+            await writer.wait_closed()
+            return
+
         request.writer = writer
 
         try:
@@ -83,6 +115,7 @@ class Server(WorkForce):
         except self.WorkerNotFound:
             await respond(request, '<strong>Path not Found</strong>', 404)
             writer.close()
+            await writer.wait_closed()
 
     async def _run(self):
         server = await asyncio.start_server(
@@ -97,10 +130,7 @@ class Server(WorkForce):
         asyncio.run(self._run())
 
 
-server = Server()
-
-@server.worker(name='/')
-class Root(Worker):
+class Endpoint(Worker):
     async def handle_workitem(self, request, *args, **kwargs):
         try:
             func = getattr(self, request.method.lower())
@@ -109,11 +139,18 @@ class Root(Worker):
             payload, status = await func(request, **dict(p.named.items()))
         except AttributeError:
             payload, status = '<strong>Method not supported</strong>', 404
-        except Exception:
-            payload, status = '<strong>Something went wrong</strong>', 500
+        except Exception as e:
+            traceback.print_exc()
+            payload, status = f'<strong>Something went wrong</strong><p>{e}</p>', 500
         await respond(request, payload, status)
         request.writer.close()
 
+
+server = Server()
+
+
+@server.worker(name='/')
+class Root(Endpoint):
     async def get(self, request):
         return (f"""
                 <h2>Made with WorkForce</h2>
@@ -121,21 +158,29 @@ class Root(Worker):
                 """), 200
 
 
+@server.worker(name='/company/{c_id}/employee')
+class Employee(Endpoint):
+    async def post(self, request, c_id):
+        print(request)
+        return 'Created Employee', 201
+
+
 @server.worker(name='/company/{c_id}/employee/{e_id}')
-class Employee(Root):
+class EmployeeDetail(Endpoint):
     async def get(self, request, c_id, e_id):
         return f'<p>Company {c_id} has employee {e_id}</p>', 200
 
-    async def post(self, request):
-        print(f'post: {request}')
+    async def put(self, request, c_id, e_id):
+        print(request)
+        return 'Updated Employee', 200
 
-    async def put(self, request):
-        print(f'put: {request}')
+    async def patch(self, request, c_id, e_id):
+        print(request)
+        return 'Partially updated Employee', 200
 
-    async def patch(self, request):
-        print(f'patch: {request}')
+    async def delete(self, request, c_id, e_id):
+        print(request)
+        return 'Deleted Employee', 204
 
-    async def delete(self, request):
-        print(f'delete: {request}')
 
 server.start()

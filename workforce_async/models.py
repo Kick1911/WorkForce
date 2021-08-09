@@ -236,7 +236,7 @@ class WorkForce:
             w = self.workers
             for p in path:
                 x = '_' if p.startswith('{') else p
-                w[x] = {}
+                w[x] = w.get(x, {})
                 w = w[x]
             w[self.worker_name_delimiter] = cls(name)
             return cls
