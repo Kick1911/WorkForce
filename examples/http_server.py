@@ -2,6 +2,7 @@ import json
 import asyncio
 import traceback
 from parse import parse
+from urllib.parse import parse_qs, urlparse
 from workforce_async import WorkForce, Worker
 
 
@@ -9,9 +10,11 @@ class HTTPRequest:
     class ParsePayloadError(Exception):
         pass
 
-    def __init__(self, method, path, version, headers, payload, writer=None):
+    def __init__(self, method, path, query, version, headers, payload,
+                 writer=None):
         self.method = method
         self.path = path
+        self.query = query
         self.version = version
         self.headers = headers
         self.payload = payload
@@ -32,9 +35,11 @@ class HTTPRequest:
     def parse(cls, raw):
         i = 1
         lines = raw.splitlines()
-        p = parse('{method} {path} {version}', lines[0])
+        p = parse('{method} {url} {version}', lines[0])
         method = p['method']
-        path = p['path'] if p['path'] == '/' else p['path'].rstrip('/')
+        url = urlparse(p['url'])
+        path = url.path if url.path == '/' else url.path.rstrip('/')
+        query = parse_qs(url.query)
         version = p['version']
         headers = {}
 
@@ -49,7 +54,7 @@ class HTTPRequest:
                 headers.get('Content-Type'), payload
             )
 
-        return cls(method, path, version, headers, payload)
+        return cls(method, path, query, version, headers, payload)
 
     def __str__(self):
         return '\n'.join([f'{self.method} {self.path} {self.version}',
@@ -136,12 +141,15 @@ class Endpoint(Worker):
             func = getattr(self, request.method.lower())
             p = parse(self.name, request.path)
 
-            payload, status = await func(request, **dict(p.named.items()))
         except AttributeError:
             payload, status = '<strong>Method not supported</strong>', 404
-        except Exception as e:
-            traceback.print_exc()
-            payload, status = f'<strong>Something went wrong</strong><p>{e}</p>', 500
+        else:
+            try:
+                payload, status = await func(request, **dict(p.named.items()))
+            except Exception as e:
+                traceback.print_exc()
+                payload, status = f'<strong>Something went wrong</strong><p>{e}</p>', 500
+
         await respond(request, payload, status)
         request.writer.close()
 
@@ -168,7 +176,8 @@ class Employee(Endpoint):
 @server.worker(name='/company/{c_id}/employee/{e_id}')
 class EmployeeDetail(Endpoint):
     async def get(self, request, c_id, e_id):
-        return f'<p>Company {c_id} has employee {e_id}</p>', 200
+        return (f'<p>Company {c_id} has employee {e_id}</p>'
+                f'<p>{request.query}</p>'), 200
 
     async def put(self, request, c_id, e_id):
         print(request)
