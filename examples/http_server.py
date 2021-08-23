@@ -2,7 +2,7 @@ import json
 import asyncio
 import traceback
 from parse import parse
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlparse
 from workforce_async import WorkForce, Worker
 
 
@@ -24,7 +24,7 @@ class HTTPRequest:
     def parse_payload(content_type, payload) -> dict:
         try:
             func = {
-                # 'application/x-www-form-urlencoded': None,
+                'application/x-www-form-urlencoded': lambda x: dict(parse_qsl(x)),
                 'application/json': json.loads,
             }[content_type]
         except KeyError:
