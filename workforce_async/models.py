@@ -133,8 +133,6 @@ class TimeoutWrapper(Wrapper):
 
 
 class BaseWorker:
-    pool = None
-
     def __init__(self, name):
         self.name = name
 
@@ -162,14 +160,25 @@ class BaseWorker:
 
 
 class Worker(BaseWorker):
+    async def handle_workitem(*args, **kwargs):
+        """
+        @returns: coroutine or tuple(coroutine, callback)
+        Can also use the wrappers yourself to add behaviour to your tasks
+        """
+        raise NotImplementedError
+
     def start_workflow(
         self, task, args: tuple = None, kwargs: dict = None,
         *eargs, **ekwargs
     ) -> asyncio.Task:
-        return self.run_coro_async(
-            self.task(*args, **kwargs),
-            *eargs, **ekwargs
-        )
+        ret = self.handle_workitem(task, *(args or ()), **(kwargs or {}))
+
+        if type(ret) != tuple:
+            coro = ret
+        else:
+            coro, ekwargs['callback'] = ret
+
+        return self.run_coro_async(coro, *eargs, **ekwargs)
 
 
 class Workspace:
@@ -192,6 +201,7 @@ class Workspace:
 class WorkForce:
     _index = 0
     workers = None
+    worker_name_delimiter = '.'
     workspaces = None
     queues = QueueManager()
 
@@ -200,13 +210,41 @@ class WorkForce:
 
     def __init__(self, workspaces=1):
         self.workspaces = [Workspace() for _ in range(workspaces)]
-        self.workers = {'default': Worker('default')}
+        self.workers = {
+            'default': {self.worker_name_delimiter: Worker('default')}
+        }
 
     def queue(self, key):
         return self.queues.create(key, loop=self._next.loop)
 
-    def get_worker(self, task_type):
-        return self.workers['default']
+    def get_worker(self, name):
+        w = self.workers
+        path = (name.strip(self.worker_name_delimiter)
+                .split(self.worker_name_delimiter))
+        for p in path:
+            try:
+                w = w[p]
+            except KeyError:
+                w = w['_']
+        return w[self.worker_name_delimiter]
+
+    def worker(self, *args, **kwargs):
+        def process(cls, **pkwargs):
+            name = pkwargs.get('name', cls.__name__.lower())
+            path = (name.strip(self.worker_name_delimiter)
+                    .split(self.worker_name_delimiter))
+            w = self.workers
+            for p in path:
+                x = '_' if p.startswith('{') else p
+                w[x] = w.get(x, {})
+                w = w[x]
+            w[self.worker_name_delimiter] = cls(name)
+            return cls
+
+        def wrapper(cls):
+            return process(cls, **kwargs)
+
+        return process(args[0]) if len(args) > 0 else wrapper
 
     def schedule_workflow(self, workitem, *args,
                           **kwargs) -> asyncio.Task:
@@ -217,7 +255,7 @@ class WorkForce:
         except KeyError:
             raise self.WorkerNotFound
 
-    def schedule(self, func, *args, task_type=None,
+    def schedule(self, func, *args, task_type='default',
                  **kwargs) -> asyncio.Task:
         try:
             worker = self.get_worker(task_type)
@@ -225,15 +263,6 @@ class WorkForce:
             raise self.WorkerNotFound
         return worker.run_func_async(func, *args, loop=self._next.loop,
                                      **kwargs)
-
-    def worker(self, *args, **kwargs):
-        def process(cls, **pkwargs):
-            self.workers[pkwargs.get('name', cls.__name__)] = cls(cls.__name__)
-            return cls
-
-        def wrapper(cls):
-            return process(cls, **kwargs)
-        return process(args[0]) if len(args) > 0 else wrapper
 
     def task(self, *eargs, **ekwargs):
         def process(func, **pkwargs):

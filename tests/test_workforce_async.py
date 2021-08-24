@@ -7,7 +7,7 @@ from workforce_async import (
 
 
 def test_version():
-    assert __version__ == '0.1.0'
+    assert __version__ == '0.9.0'
 
 
 def test_workers():
@@ -18,19 +18,19 @@ def test_workers():
         pass
 
     assert len(workforce.workers) == 2
-    assert isinstance(workforce.workers['Dev'], Dev)
+    assert isinstance(workforce.workers['dev']['.'], Dev)
 
     @workforce.worker(name='programmer')
     class Developer(Worker):
         pass
 
     assert len(workforce.workers) == 3
-    assert 'Developer' not in workforce.workers
-    assert isinstance(workforce.workers['programmer'], Developer)
+    assert 'developer' not in workforce.workers
+    assert isinstance(workforce.workers['programmer']['.'], Developer)
 
-    workforce.lay_off_worker('Dev')
+    workforce.lay_off_worker('dev')
     assert len(workforce.workers) == 2
-    assert 'Dev' not in workforce.workers
+    assert 'dev' not in workforce.workers
 
 
 def test_framework():
@@ -65,29 +65,24 @@ def test_framework():
 
     class Company(WorkForce):
         def get_worker(self, workitem):
-            """
-            You could make this conditional-less by attaching a worker name
-            to a task or the worker itself
-            """
-            if isinstance(workitem, NewFeature):
-                return self.workers['Developer']
-            elif (isinstance(workitem, Hire)
-                  or isinstance(workitem, EmployeeCounseling)):
-                return self.workers['HR']
-            else:
+            try:
+                worker_name = {
+                    'NewFeature': 'developer',
+                    'Hire': 'hr',
+                    'EmployeeCounseling': 'hr'
+                }[type(workitem).__name__]
+
+                return super().get_worker(worker_name)
+            except KeyError:
                 raise self.WorkerNotFound
 
     company = Company()
 
     @company.worker
     class HR(Worker):
-        def start_workflow(self, workitem, *eargs, **ekwargs):
+        def handle_workitem(self, workitem, *args, **kwargs):
             callback = getattr(self, workitem.callback, None)
-
-            return self.run_coro_async(
-                getattr(self, workitem.task)(workitem),
-                *eargs, callback=callback, **ekwargs
-            )
+            return getattr(self, workitem.task)(workitem), callback
 
         async def hire_new_talent(self, workitem):
             pass
@@ -97,7 +92,7 @@ def test_framework():
 
     @company.worker
     class Developer(Worker):
-        def start_workflow(self, workitem, *args, **kwargs):
+        def handle_workitem(self, workitem, *args, **kwargs):
             callback = getattr(workitem, 'callback', None)
 
             # All tasks here run concurrent
@@ -105,14 +100,10 @@ def test_framework():
                      for task_name in workitem.tasks)
 
             # Hack because asyncio.gather is not recognised as a coroutine
-            # Only tested on Py 3.6
             async def gather(*aws, **kwargs):
                 return await asyncio.gather(*aws, **kwargs)
 
-            return self.run_coro_async(
-                gather(*coros, loop=kwargs['loop']),
-                *args, callback=callback, **kwargs
-            )
+            return gather(*coros), callback
 
         async def design(self, workitem):
             await asyncio.sleep(3)
