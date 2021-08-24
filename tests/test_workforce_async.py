@@ -65,10 +65,6 @@ def test_framework():
 
     class Company(WorkForce):
         def get_worker(self, workitem):
-            """
-            You could make this conditional-less by attaching a worker name
-            to a task or the worker itself
-            """
             try:
                 worker_name = {
                     'NewFeature': 'developer',

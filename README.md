@@ -45,6 +45,13 @@ async def add(a, b):
     return a + b
 
 task = add.s(4, 5)()
+
+@workforce.task()
+async def sleep(sec):
+    await asyncio.sleep(sec)
+
+workforce.queue('channel1')
+queue = sleep.q(0.5)('channel1')
 ```
 
 ## Create queues of tasks
@@ -62,16 +69,15 @@ Make your own workforce that distributes workitems to Workers
 ```python
 class Company(WorkForce):
     def get_worker(self, workitem):
-        """
-        You could make this conditional-less by attaching a worker name
-        to a task or the worker itself
-        """
-        if isinstance(workitem, NewFeature):
-            return self.workers['Developer']
-        elif (isinstance(workitem, Hire)
-              or isinstance(workitem, EmployeeCounseling)):
-            return self.workers['HR']
-        else:
+        try:
+            worker_name = {
+                'NewFeature': 'developer',
+                'Hire': 'hr',
+                'EmployeeCounseling': 'hr'
+            }[type(workitem).__name__]
+
+            return super().get_worker(worker_name)
+        except KeyError:
             raise self.WorkerNotFound
 
 company = Company()
@@ -81,19 +87,18 @@ Make your own workers that perform tasks based on the workitem they receive
 ```python
 @company.worker
 class Developer(Worker):
-    def start_workflow(self, workitem, *eargs, **ekwargs):
-        callback = getattr(self, workitem.callback, None)
+    def handle_workitem(self, workitem, *args, **kwargs):
+        callback = getattr(workitem, 'callback', None)
 
         # All tasks here run concurrent
-        coros = [self.run_coro_async(
-                    getattr(self, task_name)(workitem),
-                    *eargs, timeout=3.2, **ekwargs
-                ) for task_name in workitem.tasks]
+        coros = (getattr(self, task_name)(workitem)
+                 for task_name in workitem.tasks)
 
-        return self.run_coro_async(
-            asyncio.gather(*coros, loop=ekwargs['loop']),
-            *eargs, callback=callback, timeout=3.2, **ekwargs
-        )
+        # Hack because asyncio.gather is not recognised as a coroutine
+        async def gather(*aws, **kwargs):
+            return await asyncio.gather(*aws, **kwargs)
+
+        return gather(*coros), callback
 
     async def design(self, workitem):
         await asyncio.sleep(3)
