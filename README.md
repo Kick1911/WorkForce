@@ -1,5 +1,10 @@
-# WorkForce
+# WorkForce Async
 Asyncio Wrapper
+
+# Install in your project
+> $ pip install workforce-async
+
+https://pypi.org/project/workforce-async/
 
 # Install Dependencies
 > $ poetry install
