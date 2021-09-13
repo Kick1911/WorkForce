@@ -1,4 +1,5 @@
 import time
+import aiohttp
 import asyncio
 from workforce_async import (
     __version__, WorkForce, Worker, func_type, FunctionType, TimeoutWrapper,
@@ -7,7 +8,28 @@ from workforce_async import (
 
 
 def test_version():
-    assert __version__ == '0.9.0'
+    assert __version__ == '0.10.0'
+
+
+def test_aiohttp():
+    workforce = WorkForce()
+
+    @workforce.task(wrapper=None)
+    async def post(url, data):
+        timeout = aiohttp.ClientTimeout(total=2)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=data) as response:
+                print("Status:", response.status)
+                print("Content-type:", response.headers['content-type'])
+        return response.status
+
+    task = post.s(
+        'http://httpbin.org/post',
+        dict(key='value', context='POST Request')
+    )()
+    time.sleep(1)
+    assert task.done()
+    assert task.result() == 200
 
 
 def test_workers():

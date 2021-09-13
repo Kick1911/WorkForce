@@ -1,4 +1,5 @@
 import os
+import sys
 import asyncio
 import functools
 import concurrent.futures
@@ -22,9 +23,8 @@ def func_type(func):
 def handle_error(task):
     try:
         task.result()
-    except TimeoutError:
-        print('TimeoutError:', task)
-    except Exception:
+    except Exception as e:
+        sys.stderr.write(f'{e.__class__}\n')
         task.print_stack()
 
 
@@ -83,6 +83,8 @@ class QueueManager:
 
 
 class Wrapper:
+    workspace = None
+
     def __init__(self, *args, **kwargs):
         pass
 
@@ -93,11 +95,13 @@ class Wrapper:
 
         elif function_type == FunctionType.FUNC:
             return await asyncio.get_event_loop().run_in_executor(
-                None, functools.partial(func, *args, **kwargs)
+                self.workspace and self.workspace.pool,
+                functools.partial(func, *args, **kwargs)
             )
 
-    async def wrap(self, *args, **kwargs):
-        task = asyncio.ensure_future(self.run(*args, **kwargs))
+    async def wrap(self, func, args=(), kwargs={}, **ekwargs):
+        self.workspace = ekwargs.get('workspace')
+        task = asyncio.ensure_future(self.run(func, *args, **kwargs))
         return await task
 
 
@@ -145,17 +149,19 @@ class BaseWorker:
         return task
 
     def run_func_async(
-        self, func: Callable, args: tuple = None, kwargs: dict = None,
-        *eargs, wrapper=TimeoutWrapper(1), **ekwargs
+        self, func: Callable, args: tuple = (), kwargs: dict = {},
+        wrapper=TimeoutWrapper(1), **ekwargs
     ) -> asyncio.Task:
-        coro = (wrapper.wrap(func, *(args or ()), **(kwargs or {}))
-                if wrapper else func(*(args or ()), **(kwargs or {})))
-        return self.run_coro_async(coro, *eargs, **ekwargs)
+        if not wrapper:
+            wrapper = Wrapper()
+        coro = wrapper.wrap(func, args=args, kwargs=kwargs,
+                            workspace=ekwargs.get('workspace'))
+        return self.run_coro_async(coro, **ekwargs)
 
     def run_coro_async(self, coro, callback: Callable = None,
-                       loop=None) -> asyncio.Task:
-        task = self._create_task(coro, callback=callback, loop=loop)
-        asyncio.run_coroutine_threadsafe(coro, loop=loop)
+                       workspace=None) -> asyncio.Task:
+        task = self._create_task(coro, callback=callback, loop=workspace.loop)
+        asyncio.run_coroutine_threadsafe(coro, loop=workspace.loop)
         return task
 
 
@@ -168,10 +174,10 @@ class Worker(BaseWorker):
         raise NotImplementedError
 
     def start_workflow(
-        self, task, args: tuple = None, kwargs: dict = None,
-        *eargs, **ekwargs
+        self, task, args: tuple = (), kwargs: dict = {},
+         *eargs, **ekwargs
     ) -> asyncio.Task:
-        ret = self.handle_workitem(task, *(args or ()), **(kwargs or {}))
+        ret = self.handle_workitem(task, *args, **kwargs)
 
         if type(ret) != tuple:
             coro = ret
@@ -185,8 +191,9 @@ class Workspace:
     loop = None
     thread = None
 
-    def __init__(self):
+    def __init__(self, pool_size=1):
         self.loop = asyncio.new_event_loop()
+        self.pool = concurrent.futures.ThreadPoolExecutor(pool_size)
 
         def run():
             try:
@@ -250,19 +257,17 @@ class WorkForce:
                           **kwargs) -> asyncio.Task:
         try:
             return self.get_worker(workitem).start_workflow(
-                workitem, *args, loop=self._next.loop, **kwargs
+                workitem, *args, workspace=self._next, **kwargs
             )
         except KeyError:
             raise self.WorkerNotFound
 
-    def schedule(self, func, *args, task_type='default',
-                 **kwargs) -> asyncio.Task:
+    def schedule(self, func, task_type='default', **kwargs) -> asyncio.Task:
         try:
             worker = self.get_worker(task_type)
         except KeyError:
             raise self.WorkerNotFound
-        return worker.run_func_async(func, *args, loop=self._next.loop,
-                                     **kwargs)
+        return worker.run_func_async(func, workspace=self._next, **kwargs)
 
     def task(self, *eargs, **ekwargs):
         def process(func, **pkwargs):
