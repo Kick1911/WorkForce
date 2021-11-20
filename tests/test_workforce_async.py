@@ -4,10 +4,39 @@ from workforce_async import (
     __version__, WorkForce, Worker, func_type, FunctionType, TimeoutWrapper,
     RetryWrapper
 )
+from workforce_async.aiohttp import get, post, delete
 
 
 def test_version():
-    assert __version__ == '0.9.0'
+    assert __version__ == "0.10.0"
+
+
+def test_aiohttp():
+    workforce = WorkForce()
+
+    workforce.task(wrapper=None)(get)
+    workforce.task(wrapper=None)(post)
+    workforce.task(wrapper=None)(delete)
+
+    payload = dict(key="value", context="POST Request")
+    task = post.s(url="http://httpbin.org/post", json=payload)()
+    time.sleep(1.5)
+    assert task.done()
+    response = task.result()
+    assert response.payload["json"] == payload
+    assert response.status == 200
+
+    task = delete.s(url="http://httpbin.org/delete")()
+    time.sleep(1.5)
+    assert task.done()
+    response = task.result()
+    assert response.status == 200
+
+    task = get.s(url="http://httpbin.org/cjdsnco")()
+    time.sleep(1.5)
+    assert task.done()
+    response = task.result()
+    assert response.status == 404
 
 
 def test_workers():
@@ -194,7 +223,7 @@ def test_schedule_coro():
     def add(a, b):
         return a + b
 
-    f = workforce.schedule(add, args=(4, 2))
+    f = workforce.schedule(add, args=(4, 2), wrapper=None)
     time.sleep(0.2)
     assert f.done()
     assert f.result() == 6

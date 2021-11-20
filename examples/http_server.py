@@ -105,7 +105,7 @@ class Server(WorkForce):
         # print(f"Received {message!r} from {addr!r}")
 
         try:
-            # TODO: Processing should not be done here
+            # TODO: Processing should not be done here. Should be in a separate thread
             request = HTTPRequest.parse(data.decode())
         except Exception:
             traceback.print_exc()
@@ -114,6 +114,7 @@ class Server(WorkForce):
             return
 
         request.writer = writer
+        request.server = self
 
         try:
             self.schedule_workflow(request)
@@ -122,7 +123,7 @@ class Server(WorkForce):
             writer.close()
             await writer.wait_closed()
 
-    async def _run(self):
+    async def run(self):
         server = await asyncio.start_server(
             self.handle_request, '127.0.0.1', 8888
         )
@@ -132,7 +133,10 @@ class Server(WorkForce):
             await server.serve_forever()
 
     def start(self):
-        asyncio.run(self._run())
+        try:
+            asyncio.run(self.run())
+        except KeyboardInterrupt:
+            print("Shutting down server")
 
 
 class Endpoint(Worker):
@@ -160,9 +164,12 @@ server = Server()
 @server.worker(name='/')
 class Root(Endpoint):
     async def get(self, request):
+        workers_name = [w.name for w in request.server.workers_list]
+        workers_list = "</li><li>".join(sorted(workers_name))
         return (f"""
                 <h2>Made with WorkForce</h2>
                 <p>{request}</p>
+                <ul><li>{workers_list}</li></ul>
                 """), 200
 
 
@@ -177,7 +184,7 @@ class Employee(Endpoint):
 class EmployeeDetail(Endpoint):
     async def get(self, request, c_id, e_id):
         return (f'<p>Company {c_id} has employee {e_id}</p>'
-                f'<p>{request.query}</p>'), 200
+                f'<p>URL query: {request.query}</p>'), 200
 
     async def put(self, request, c_id, e_id):
         print(request)

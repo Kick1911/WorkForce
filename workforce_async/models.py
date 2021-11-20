@@ -1,4 +1,5 @@
 import os
+import sys
 import asyncio
 import functools
 import concurrent.futures
@@ -22,9 +23,8 @@ def func_type(func):
 def handle_error(task):
     try:
         task.result()
-    except TimeoutError:
-        print('TimeoutError:', task)
-    except Exception:
+    except Exception as e:
+        sys.stderr.write(f'{e.__class__}\n')
         task.print_stack()
 
 
@@ -86,18 +86,11 @@ class Wrapper:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def run(self, func, *args, **kwargs):
-        function_type = func_type(func)
-        if function_type == FunctionType.FUNC_CORO:
-            return await asyncio.ensure_future(func(*args, **kwargs))
+    async def run(self, func, **kwargs):
+        return await func()
 
-        elif function_type == FunctionType.FUNC:
-            return await asyncio.get_event_loop().run_in_executor(
-                None, functools.partial(func, *args, **kwargs)
-            )
-
-    async def wrap(self, *args, **kwargs):
-        task = asyncio.ensure_future(self.run(*args, **kwargs))
+    async def wrap(self, func: Callable, **kwargs):
+        task = asyncio.ensure_future(self.run(func, **kwargs))
         return await task
 
 
@@ -107,12 +100,12 @@ class RetryWrapper(Wrapper):
         self.cooldown = cooldown
         super().__init__(*args, **kwargs)
 
-    async def run(self, func, *args, **kwargs):
+    async def run(self, func, **kwargs):
         ex = None
         retries = self.retries + 1
         for _ in range(retries):
             try:
-                return await super().run(func, *args, **kwargs)
+                return await asyncio.ensure_future(func())
             except Exception as e:
                 ex = e
                 if self.cooldown:
@@ -125,11 +118,8 @@ class TimeoutWrapper(Wrapper):
         self.timeout = timeout
         super().__init__(*args, **kwargs)
 
-    async def run(self, func, *args, **kwargs):
-        return await asyncio.wait_for(
-            super().run(func, *args, **kwargs),
-            timeout=self.timeout
-        )
+    async def run(self, func, **kwargs):
+        return await asyncio.wait_for(func(), timeout=self.timeout)
 
 
 class BaseWorker:
@@ -145,12 +135,13 @@ class BaseWorker:
         return task
 
     def run_func_async(
-        self, func: Callable, args: tuple = None, kwargs: dict = None,
-        *eargs, wrapper=TimeoutWrapper(1), **ekwargs
+        self, func: Callable, args: tuple = (), kwargs: dict = {},
+        wrapper=TimeoutWrapper(1), loop=None, **ekwargs
     ) -> asyncio.Task:
-        coro = (wrapper.wrap(func, *(args or ()), **(kwargs or {}))
-                if wrapper else func(*(args or ()), **(kwargs or {})))
-        return self.run_coro_async(coro, *eargs, **ekwargs)
+        if not wrapper:
+            wrapper = Wrapper()
+        coro = wrapper.wrap(functools.partial(func, *args, **kwargs))
+        return self.run_coro_async(coro, loop=loop, **ekwargs)
 
     def run_coro_async(self, coro, callback: Callable = None,
                        loop=None) -> asyncio.Task:
@@ -168,20 +159,20 @@ class Worker(BaseWorker):
         raise NotImplementedError
 
     def start_workflow(
-        self, task, args: tuple = None, kwargs: dict = None,
-        *eargs, **ekwargs
+        self, task, args: tuple = (), kwargs: dict = {},
+        **ekwargs
     ) -> asyncio.Task:
-        ret = self.handle_workitem(task, *(args or ()), **(kwargs or {}))
+        ret = self.handle_workitem(task, *args, **kwargs)
 
         if type(ret) != tuple:
             coro = ret
         else:
             coro, ekwargs['callback'] = ret
 
-        return self.run_coro_async(coro, *eargs, **ekwargs)
+        return self.run_coro_async(coro, **ekwargs)
 
 
-class Workspace:
+class Loop:
     loop = None
     thread = None
 
@@ -198,24 +189,90 @@ class Workspace:
         self.thread.start()
 
 
-class WorkForce:
+class Workspace:
+    pool = None
+
+    def __init__(self, pool_size=1):
+        self.pool = self.create_pool(pool_size)
+
+    def create_pool(self, pool_size):
+        return [Loop() for _ in range(pool_size)]
+
+    def add_to_pool(self, size=1):
+        self.pool.extend(self.create_pool(size))
+
+    def remove_from_pool(self, size=1):
+        async def stop():
+            asyncio.get_running_loop().stop()
+
+        for _ in range(size):
+            loop = self.pool.pop()
+            asyncio.run_coroutine_threadsafe(stop(), loop=loop.loop)
+            loop.thread.join()
+            loop.loop.close()
+
+    def work(self, worker, func, **kwargs) -> asyncio.Task:
+        return worker.run_func_async(
+            self.run_func(func),
+            loop=self._next.loop,
+            **kwargs
+        )
+
+
+class AsyncWorkspace(Workspace):
     _index = 0
+
+    def run_func(self, func):
+        return func
+
+    @property
+    def _next(self):
+        self._index = (self._index + 1) % len(self.pool)
+        return self.pool[self._index]
+
+
+class SyncWorkspace(Workspace):
+    threads = None
+
+    def create_pool(self, pool_size):
+        self.threads = concurrent.futures.ThreadPoolExecutor(pool_size)
+        return [Loop()]
+
+    def run_func(self, func):
+        async def run(*args, **kwargs):
+            return await asyncio.get_running_loop().run_in_executor(
+                self.threads, functools.partial(func, *args, **kwargs)
+            )
+        return run
+
+    @property
+    def _next(self):
+        return self.pool[0]
+
+
+class WorkForce:
     workers = None
-    worker_name_delimiter = '.'
+    worker_name_delimiter = '.' # Cannot be an underscore "_"
     workspaces = None
     queues = QueueManager()
 
     class WorkerNotFound(Exception):
         pass
 
-    def __init__(self, workspaces=1):
-        self.workspaces = [Workspace() for _ in range(workspaces)]
+    def __init__(self, async_pool=1, sync_pool=1):
+        self.workers_list = []
+        self.workspaces = {
+            'async': AsyncWorkspace(async_pool),
+            'sync': SyncWorkspace(sync_pool),
+        }
         self.workers = {
             'default': {self.worker_name_delimiter: Worker('default')}
         }
 
     def queue(self, key):
-        return self.queues.create(key, loop=self._next.loop)
+        return self.queues.create(
+            key, loop=self.workspaces["async"]._next.loop
+        )
 
     def get_worker(self, name):
         w = self.workers
@@ -225,7 +282,7 @@ class WorkForce:
             try:
                 w = w[p]
             except KeyError:
-                w = w['_']
+                w = w["_"]
         return w[self.worker_name_delimiter]
 
     def worker(self, *args, **kwargs):
@@ -235,10 +292,11 @@ class WorkForce:
                     .split(self.worker_name_delimiter))
             w = self.workers
             for p in path:
-                x = '_' if p.startswith('{') else p
+                x = "_" if p.startswith('{') else p
                 w[x] = w.get(x, {})
                 w = w[x]
             w[self.worker_name_delimiter] = cls(name)
+            self.workers_list.append(w[self.worker_name_delimiter])
             return cls
 
         def wrapper(cls):
@@ -246,23 +304,28 @@ class WorkForce:
 
         return process(args[0]) if len(args) > 0 else wrapper
 
-    def schedule_workflow(self, workitem, *args,
-                          **kwargs) -> asyncio.Task:
+    def schedule_workflow(self, workitem, **kwargs) -> asyncio.Task:
         try:
             return self.get_worker(workitem).start_workflow(
-                workitem, *args, loop=self._next.loop, **kwargs
+                workitem, loop=self.workspaces['async']._next.loop,
+                **kwargs
             )
         except KeyError:
             raise self.WorkerNotFound
 
-    def schedule(self, func, *args, task_type='default',
-                 **kwargs) -> asyncio.Task:
+    def schedule(self, func, task_type='default', **kwargs) -> asyncio.Task:
         try:
             worker = self.get_worker(task_type)
         except KeyError:
             raise self.WorkerNotFound
-        return worker.run_func_async(func, *args, loop=self._next.loop,
-                                     **kwargs)
+        return self.get_workspace(func).work(worker, func, **kwargs)
+
+    def get_workspace(self, func):
+        pool = {
+            FunctionType.FUNC_CORO: 'async',
+            FunctionType.FUNC: 'sync'
+        }[func_type(func)]
+        return self.workspaces[pool]
 
     def task(self, *eargs, **ekwargs):
         def process(func, **pkwargs):
@@ -290,9 +353,3 @@ class WorkForce:
 
     def lay_off_worker(self, worker_name):
         return self.workers.pop(worker_name)
-
-    @property
-    def _next(self) -> Workspace:
-        self._index = (self._index + 1) % len(self.workspaces)
-        return self.workspaces[self._index]
-
