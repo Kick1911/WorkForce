@@ -21,15 +21,15 @@ def test_aiohttp():
             async with session.post(url, json=data) as response:
                 print("Status:", response.status)
                 print("Content-type:", response.headers['content-type'])
-        return response.status
+                return await response.json(), response.status
 
-    task = post.s(
-        'http://httpbin.org/post',
-        dict(key='value', context='POST Request')
-    )()
-    time.sleep(1)
+    payload = dict(key='value', context='POST Request')
+    task = post.s('http://httpbin.org/post', payload)()
+    time.sleep(1.5)
     assert task.done()
-    assert task.result() == 200
+    response, status = task.result()
+    assert response["json"] == payload
+    assert status == 200
 
 
 def test_workers():

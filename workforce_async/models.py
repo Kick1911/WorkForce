@@ -190,16 +190,17 @@ class Loop:
 
 
 class Workspace:
-    pool_size = 0
     pool = None
 
     def __init__(self, pool_size=1):
-        self.pool_size = pool_size
-        self.create_pool()
+        self.create_pool(pool_size)
+
+    def create_pool(self, pool_size):
+        self.pool = [Loop() for _ in range(pool_size)]
 
     def work(self, worker, func, **kwargs):
         return worker.run_func_async(
-            func, # Might need to replace with functools.partial(self.run_func, func)
+            self.run_func(func),
             loop=self._next.loop,
             **kwargs
         )
@@ -208,30 +209,28 @@ class Workspace:
 class AsyncWorkspace(Workspace):
     _index = 0
 
-    def create_pool(self):
-        self.pool = [Loop() for _ in range(self.pool_size)]
-
-    # Causes errors
-    async def run_func(self, func):
-        return await func()
+    def run_func(self, func):
+        return func
 
     @property
     def _next(self):
-        self._index = (self._index + 1) % self.pool_size
+        self._index = (self._index + 1) % len(self.pool)
         return self.pool[self._index]
 
 
 class SyncWorkspace(Workspace):
     threads = None
 
-    def create_pool(self):
-        self.threads = concurrent.futures.ThreadPoolExecutor(self.pool_size)
+    def create_pool(self, pool_size):
+        self.threads = concurrent.futures.ThreadPoolExecutor(pool_size)
         self.pool = [Loop()]
 
-    async def run_func(self, func):
-        return await self._next.loop.run_in_executor(
-            self.threads, func
-        )
+    def run_func(self, func):
+        async def run(*args, **kwargs):
+            return await asyncio.get_running_loop().run_in_executor(
+                self.threads, functools.partial(func, *args, **kwargs)
+            )
+        return run
 
     @property
     def _next(self):
