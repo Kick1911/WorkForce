@@ -193,12 +193,25 @@ class Workspace:
     pool = None
 
     def __init__(self, pool_size=1):
-        self.create_pool(pool_size)
+        self.pool = self.create_pool(pool_size)
 
     def create_pool(self, pool_size):
-        self.pool = [Loop() for _ in range(pool_size)]
+        return [Loop() for _ in range(pool_size)]
 
-    def work(self, worker, func, **kwargs):
+    def add_to_pool(self, size=1):
+        self.pool.extend(self.create_pool(size))
+
+    def remove_from_pool(self, size=1):
+        async def stop():
+            asyncio.get_running_loop().stop()
+
+        for _ in range(size):
+            loop = self.pool.pop()
+            asyncio.run_coroutine_threadsafe(stop(), loop=loop.loop)
+            loop.thread.join()
+            loop.loop.close()
+
+    def work(self, worker, func, **kwargs) -> asyncio.Task:
         return worker.run_func_async(
             self.run_func(func),
             loop=self._next.loop,
@@ -223,7 +236,7 @@ class SyncWorkspace(Workspace):
 
     def create_pool(self, pool_size):
         self.threads = concurrent.futures.ThreadPoolExecutor(pool_size)
-        self.pool = [Loop()]
+        return [Loop()]
 
     def run_func(self, func):
         async def run(*args, **kwargs):
@@ -239,7 +252,7 @@ class SyncWorkspace(Workspace):
 
 class WorkForce:
     workers = None
-    worker_name_delimiter = '.'
+    worker_name_delimiter = '.' # Cannot be an underscore "_"
     workspaces = None
     queues = QueueManager()
 
@@ -247,6 +260,7 @@ class WorkForce:
         pass
 
     def __init__(self, async_pool=1, sync_pool=1):
+        self.workers_list = []
         self.workspaces = {
             'async': AsyncWorkspace(async_pool),
             'sync': SyncWorkspace(sync_pool),
@@ -256,7 +270,9 @@ class WorkForce:
         }
 
     def queue(self, key):
-        return self.queues.create(key, loop=self.workspaces["async"]._next.loop)
+        return self.queues.create(
+            key, loop=self.workspaces["async"]._next.loop
+        )
 
     def get_worker(self, name):
         w = self.workers
@@ -266,7 +282,7 @@ class WorkForce:
             try:
                 w = w[p]
             except KeyError:
-                w = w[self.worker_name_delimiter]
+                w = w["_"]
         return w[self.worker_name_delimiter]
 
     def worker(self, *args, **kwargs):
@@ -276,10 +292,11 @@ class WorkForce:
                     .split(self.worker_name_delimiter))
             w = self.workers
             for p in path:
-                x = self.worker_name_delimiter if p.startswith('{') else p
+                x = "_" if p.startswith('{') else p
                 w[x] = w.get(x, {})
                 w = w[x]
             w[self.worker_name_delimiter] = cls(name)
+            self.workers_list.append(w[self.worker_name_delimiter])
             return cls
 
         def wrapper(cls):
