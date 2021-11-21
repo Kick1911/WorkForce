@@ -320,6 +320,9 @@ class WorkForce:
             raise self.WorkerNotFound
         return self.get_workspace(func).work(worker, func, **kwargs)
 
+    def make_async(self, func):
+        return self.get_workspace(func).run_func(func)
+
     def get_workspace(self, func):
         pool = {
             FunctionType.FUNC_CORO: 'async',

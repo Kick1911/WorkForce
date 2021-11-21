@@ -233,6 +233,13 @@ def test_schedule_coro():
     assert f.done()
     assert f.result() == 6
 
+    async def sync_in_async():
+        return await workforce.make_async(add)(3, 32)
+    f = workforce.schedule(sync_in_async)
+    time.sleep(0.5)
+    assert f.done()
+    assert f.result() == 35
+
     async def foo():
         await asyncio.sleep(0.8)
         bar.count += 1
