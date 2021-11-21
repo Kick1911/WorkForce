@@ -203,7 +203,7 @@ class Workspace:
 
     def remove_from_pool(self, size=1):
         async def stop():
-            asyncio.get_running_loop().stop()
+            asyncio.get_event_loop().stop()
 
         for _ in range(size):
             loop = self.pool.pop()
@@ -240,7 +240,7 @@ class SyncWorkspace(Workspace):
 
     def run_func(self, func):
         async def run(*args, **kwargs):
-            return await asyncio.get_running_loop().run_in_executor(
+            return await asyncio.get_event_loop().run_in_executor(
                 self.threads, functools.partial(func, *args, **kwargs)
             )
         return run
