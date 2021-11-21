@@ -8,7 +8,7 @@ from workforce_async.aiohttp import get, post, delete
 
 
 def test_version():
-    assert __version__ == "0.11.0"
+    assert __version__ == "0.11.1"
 
 
 def test_aiohttp():
