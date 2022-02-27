@@ -33,7 +33,6 @@ def handle_error(task):
 class Queue:
     raw_queue = None
     task = None
-    loop = None
 
     def __init__(self, loop=None, Queue=asyncio.Queue, **kwargs):
         self.raw_queue = Queue(**kwargs)
@@ -286,6 +285,9 @@ class WorkspaceManager:
 
     def get(self, name, runtime="async"):
         return self.workspaces[runtime][name]
+
+    def delete(self, name, runtime="async"):
+        del self.workspaces[runtime][name]
 
 
 class WorkForce:

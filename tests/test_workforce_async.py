@@ -1,4 +1,5 @@
 import time
+import pytest
 import asyncio
 from workforce_async import (
     __version__, WorkForce, Worker, func_type, FunctionType, TimeoutWrapper,
@@ -369,3 +370,7 @@ def test_queue():
     assert len(queue) == 1
     time.sleep(1.2)
     assert not len(queue)
+
+    workforce.workspaces.delete("custom")
+    with pytest.raises(KeyError):
+        workforce.workspaces.get("custom")
