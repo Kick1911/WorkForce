@@ -1,14 +1,15 @@
 import time
+import pytest
 import asyncio
 from workforce_async import (
     __version__, WorkForce, Worker, func_type, FunctionType, TimeoutWrapper,
-    RetryWrapper
+    RetryWrapper, AsyncWorkspace
 )
 from workforce_async.aiohttp import get, post, delete
 
 
 def test_version():
-    assert __version__ == "0.11.2"
+    assert __version__ == "0.12.0"
 
 
 def test_aiohttp():
@@ -65,6 +66,7 @@ def test_workers():
 def test_framework():
     class Foo:
         arr = []
+        result = None
     bar = Foo()
 
     # You can make a Task Factory as well
@@ -92,6 +94,9 @@ def test_framework():
             """ write_a_report """
             pass
 
+    class Office(AsyncWorkspace):
+        pass
+
     class Company(WorkForce):
         def get_worker(self, workitem):
             try:
@@ -106,18 +111,29 @@ def test_framework():
                 raise self.WorkerNotFound
 
     company = Company()
+    office = Office(2)
+    office.toolbox.update(laptop="Mac", phone="Android")
+    company.workspaces.add("office", office, runtime="async")
 
     @company.worker
     class HR(Worker):
-        def handle_workitem(self, workitem, *args, **kwargs):
-            callback = getattr(self, workitem.callback, None)
-            return getattr(self, workitem.task)(workitem), callback
+        workspace = "office"
 
-        async def hire_new_talent(self, workitem):
-            pass
+        def handle_workitem(self, workitem, *args, toolbox=None, **kwargs):
+            callback = getattr(workitem, "callback", None)
+            coro = getattr(self, workitem.task)(workitem, toolbox=toolbox)
 
-        async def handle_problem_employee(self, workitem):
-            pass
+            if callback:
+                return coro, callback
+            return coro
+
+        async def hire_new_talent(self, workitem, toolbox=None):
+            phone = toolbox["phone"]
+            bar.result = f"Got new talent with a call on an {phone} phone."
+
+        async def handle_problem_employee(self, workitem, toolbox=None):
+            laptop = toolbox["laptop"]
+            bar.result = f"Zoom call with Employee on a {laptop} laptop."
 
     @company.worker
     class Developer(Worker):
@@ -154,6 +170,13 @@ def test_framework():
     time.sleep(1.2)
     assert bar.arr == ['test', 'code', 'design', 'make_pr']
 
+    company.schedule_workflow(Hire())
+    time.sleep(0.5)
+    assert bar.result == "Got new talent with a call on an Android phone."
+    company.schedule_workflow(EmployeeCounseling())
+    time.sleep(0.5)
+    assert bar.result == "Zoom call with Employee on a Mac laptop."
+
 
 def test_decorator():
     class Foo:
@@ -185,6 +208,22 @@ def test_decorator():
     time.sleep(0.6)
     assert not len(queue)
     workforce.queues.destroy('channel1')
+
+    class CustomWorkspace(AsyncWorkspace):
+        pass
+
+    workspace = CustomWorkspace(2)
+    workspace.toolbox.update(a=5, b=2)
+    workforce.workspaces.add("custom", workspace)
+
+    @workforce.task(workspace_name="custom")
+    async def foo(l, toolbox=None):
+        return l + toolbox["a"] + toolbox["b"]
+
+    task = foo.s(4)()
+    time.sleep(0.5)
+    assert task.done()
+    assert task.result() == 11
 
 
 def test_func_type():
@@ -309,12 +348,29 @@ def test_queue():
     workforce = WorkForce()
     queue = workforce.queue('channel1')
     queue.put(foo())
-    f = workforce.schedule(foo)
+    f = workforce.schedule(foo, wrapper=None)
     queue.put(foo())
     queue.put(foo())
+
     assert len(queue) == 3
-    time.sleep(3)
+    time.sleep(3.5)
     assert not len(queue)
     assert f.done()
     workforce.queues.destroy('channel1')
+    assert not len(workforce.queues)
 
+    class CustomWorkspace(AsyncWorkspace):
+        pass
+
+    workspace = CustomWorkspace(1)
+    workforce.workspaces.add("custom", workspace)
+
+    queue = workforce.queue("channel2", "custom")
+    queue.put(foo())
+    assert len(queue) == 1
+    time.sleep(1.2)
+    assert not len(queue)
+
+    workforce.workspaces.delete("custom")
+    with pytest.raises(KeyError):
+        workforce.workspaces.get("custom")
