@@ -17,7 +17,7 @@ classifiers = [
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.6"
+python = ">= 3.6, < 3.10"
 aiohttp = "^3.7.4"
 
 [tool.poetry.dev-dependencies]
