@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "workforce-async"
-version = "0.11.2"
+version = "0.12.0"
 description = "Asyncio Wrapper"
 authors = ["Caswall Engelsman <mail@cengelsman.com>"]
 homepage = "https://github.com/Kick1911/WorkForce"
