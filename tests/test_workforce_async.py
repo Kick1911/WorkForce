@@ -309,12 +309,13 @@ def test_queue():
     workforce = WorkForce()
     queue = workforce.queue('channel1')
     queue.put(foo())
-    f = workforce.schedule(foo)
+    f = workforce.schedule(foo, wrapper=None)
     queue.put(foo())
     queue.put(foo())
+
     assert len(queue) == 3
-    time.sleep(3)
+    time.sleep(3.5)
     assert not len(queue)
     assert f.done()
     workforce.queues.destroy('channel1')
-
+    assert not len(workforce.queues)

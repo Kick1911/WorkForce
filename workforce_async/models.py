@@ -31,25 +31,29 @@ def handle_error(task):
 class Queue:
     raw_queue = None
     task = None
+    loop = None
 
-    def __init__(self, loop=None, Queue=asyncio.Queue, **kwargs):
+    def __init__(self, loop=None, Queue=asyncio.Queue, toolbox=None, **kwargs):
         self.raw_queue = Queue(**kwargs)
 
+        self.toolbox = toolbox
+        self.loop = loop
         coro = self.consumer()
         self.task = asyncio.ensure_future(coro, loop=loop)
         asyncio.run_coroutine_threadsafe(coro, loop=loop)
 
     async def consumer(self):
         while 1:
-            coro = await self.raw_queue.get()
-            await coro
+            task = await self.raw_queue.get()
+            await task
             self.raw_queue.task_done()
 
     def __len__(self):
         return self.raw_queue.qsize()
 
-    def put(self, item):
-        self.raw_queue.put_nowait(item)
+    def put(self, coro):
+        task = asyncio.ensure_future(coro, loop=self.loop)
+        self.raw_queue.put_nowait(task)
 
     def destroy(self):
         self.task.cancel()
@@ -61,22 +65,30 @@ class QueueManager:
     class QueueNotFound(Exception):
         pass
 
+    class QueueNameExists(Exception):
+        pass
+
     def __init__(self):
         self.queues = {}
 
-    def create(self, key, loop=None, **kwargs):
-        self.queues[key] = Queue(loop=loop, **kwargs)
-        return self.queues[key]
+    def __len__(self):
+        return len(self.queues)
 
-    def get(self, key):
+    def create(self, name, loop=None, **kwargs):
+        if name in self.queues:
+            raise self.QueueNameExists
+        self.queues[name] = Queue(loop=loop, **kwargs)
+        return self.queues[name]
+
+    def get(self, name):
         try:
-            return self.queues[key]
+            return self.queues[name]
         except KeyError:
             raise self.QueueNotFound
 
-    def destroy(self, key):
+    def destroy(self, name):
         try:
-            q = self.queues.pop(key)
+            q = self.queues.pop(name)
             q.destroy()
         except KeyError:
             raise self.QueueNotFound
@@ -151,6 +163,8 @@ class BaseWorker:
 
 
 class Worker(BaseWorker):
+    workspace = "default"
+
     async def handle_workitem(*args, **kwargs):
         """
         @returns: coroutine or tuple(coroutine, callback)
@@ -191,9 +205,11 @@ class Loop:
 
 class Workspace:
     pool = None
+    toolbox = None
 
     def __init__(self, pool_size=1):
         self.pool = self.create_pool(pool_size)
+        self.toolbox = {}
 
     def create_pool(self, pool_size):
         return [Loop() for _ in range(pool_size)]
@@ -250,28 +266,57 @@ class SyncWorkspace(Workspace):
         return self.pool[0]
 
 
+class WorkspaceManager:
+    workspaces = None
+
+    class WorkspaceNameTaken(Exception):
+        pass
+
+    def __init__(self):
+        self.workspaces = {"async": {}, "sync": {}}
+
+    def add(self, name, workspace, runtime="async"):
+        if name in self.workspaces[runtime]:
+            raise self.WorkspaceNameTaken
+        self.workspaces[runtime][name] = workspace
+
+    def get(self, name, runtime="async"):
+        return self.workspaces[runtime][name]
+
+
 class WorkForce:
     workers = None
     worker_name_delimiter = '.' # Cannot be an underscore "_"
     workspaces = None
-    queues = QueueManager()
+    queues = None
 
     class WorkerNotFound(Exception):
         pass
 
     def __init__(self, async_pool=1, sync_pool=1):
         self.workers_list = []
-        self.workspaces = {
-            'async': AsyncWorkspace(async_pool),
-            'sync': SyncWorkspace(sync_pool),
-        }
+        self.queues = QueueManager()
+        self.workspaces = WorkspaceManager()
+        self.workspaces.add(
+            "default",
+            AsyncWorkspace(async_pool),
+            runtime="async"
+        )
+        self.workspaces.add(
+            "default",
+            SyncWorkspace(sync_pool),
+            runtime="sync"
+        )
         self.workers = {
-            'default': {self.worker_name_delimiter: Worker('default')}
+            "default": {self.worker_name_delimiter: Worker("default")}
         }
 
-    def queue(self, key):
+    def queue(self, key, workspace_name="default"):
+        workspace = self.workspaces.get(workspace_name, runtime="async")
+
         return self.queues.create(
-            key, loop=self.workspaces["async"]._next.loop
+            key, loop=workspace._next.loop,
+            toolbox=workspace.toolbox
         )
 
     def get_worker(self, name):
@@ -306,8 +351,10 @@ class WorkForce:
 
     def schedule_workflow(self, workitem, **kwargs) -> asyncio.Task:
         try:
-            return self.get_worker(workitem).start_workflow(
-                workitem, loop=self.workspaces['async']._next.loop,
+            worker = self.get_worker(workitem)
+            return worker.start_workflow(
+                workitem,
+                loop=self.workspaces.get(worker.workspace, runtime="async")._next.loop,
                 **kwargs
             )
         except KeyError:
@@ -318,17 +365,24 @@ class WorkForce:
             worker = self.get_worker(task_type)
         except KeyError:
             raise self.WorkerNotFound
-        return self.get_workspace(func).work(worker, func, **kwargs)
+
+        return self.workspaces.get(
+            worker.workspace,
+            runtime=self.get_runtime_name(func)
+        ).work(worker, func, **kwargs)
 
     def make_async(self, func):
-        return self.get_workspace(func).run_func(func)
+        return self.workspaces.get(
+            "default",
+            runtime=self.get_runtime_name(func)
+        ).run_func(func)
 
-    def get_workspace(self, func):
-        pool = {
+    def get_runtime_name(self, func):
+        runtime = {
             FunctionType.FUNC_CORO: 'async',
             FunctionType.FUNC: 'sync'
         }[func_type(func)]
-        return self.workspaces[pool]
+        return runtime
 
     def task(self, *eargs, **ekwargs):
         def process(func, **pkwargs):

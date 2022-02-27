@@ -6,6 +6,9 @@ Asyncio Wrapper
 
 https://pypi.org/project/workforce-async/
 
+# Select your python version
+> $ poetry env use 3.7
+
 # Install Dependencies
 > $ poetry install
 
