@@ -28,32 +28,31 @@ def handle_error(task):
         task.print_stack()
 
 
+# Could not toolbox feature to work with Queue.
+# asyncio.Queue felt unstable when I tried.
 class Queue:
     raw_queue = None
     task = None
     loop = None
 
-    def __init__(self, loop=None, Queue=asyncio.Queue, toolbox=None, **kwargs):
+    def __init__(self, loop=None, Queue=asyncio.Queue, **kwargs):
         self.raw_queue = Queue(**kwargs)
 
-        self.toolbox = toolbox
-        self.loop = loop
         coro = self.consumer()
         self.task = asyncio.ensure_future(coro, loop=loop)
         asyncio.run_coroutine_threadsafe(coro, loop=loop)
 
     async def consumer(self):
         while 1:
-            task = await self.raw_queue.get()
-            await task
+            coro = await self.raw_queue.get()
+            await coro
             self.raw_queue.task_done()
 
     def __len__(self):
         return self.raw_queue.qsize()
 
     def put(self, coro):
-        task = asyncio.ensure_future(coro, loop=self.loop)
-        self.raw_queue.put_nowait(task)
+        self.raw_queue.put_nowait(coro)
 
     def destroy(self):
         self.task.cancel()
@@ -148,10 +147,12 @@ class BaseWorker:
 
     def run_func_async(
         self, func: Callable, args: tuple = (), kwargs: dict = {},
-        wrapper=TimeoutWrapper(1), loop=None, **ekwargs
+        wrapper=TimeoutWrapper(1), loop=None, toolbox=None, **ekwargs
     ) -> asyncio.Task:
         if not wrapper:
             wrapper = Wrapper()
+        if toolbox:
+            kwargs.update(toolbox=toolbox)
         coro = wrapper.wrap(functools.partial(func, *args, **kwargs))
         return self.run_coro_async(coro, loop=loop, **ekwargs)
 
@@ -174,8 +175,10 @@ class Worker(BaseWorker):
 
     def start_workflow(
         self, task, args: tuple = (), kwargs: dict = {},
-        **ekwargs
+        toolbox=None, **ekwargs
     ) -> asyncio.Task:
+        if toolbox:
+            kwargs.update(toolbox=toolbox)
         ret = self.handle_workitem(task, *args, **kwargs)
 
         if type(ret) != tuple:
@@ -231,6 +234,7 @@ class Workspace:
         return worker.run_func_async(
             self.run_func(func),
             loop=self._next.loop,
+            toolbox=self.toolbox,
             **kwargs
         )
 
@@ -314,10 +318,7 @@ class WorkForce:
     def queue(self, key, workspace_name="default"):
         workspace = self.workspaces.get(workspace_name, runtime="async")
 
-        return self.queues.create(
-            key, loop=workspace._next.loop,
-            toolbox=workspace.toolbox
-        )
+        return self.queues.create(key, loop=workspace._next.loop)
 
     def get_worker(self, name):
         w = self.workers
@@ -352,22 +353,25 @@ class WorkForce:
     def schedule_workflow(self, workitem, **kwargs) -> asyncio.Task:
         try:
             worker = self.get_worker(workitem)
+            workspace = self.workspaces.get(worker.workspace, runtime="async")
             return worker.start_workflow(
                 workitem,
-                loop=self.workspaces.get(worker.workspace, runtime="async")._next.loop,
+                loop=workspace._next.loop,
+                toolbox=workspace.toolbox,
                 **kwargs
             )
         except KeyError:
             raise self.WorkerNotFound
 
-    def schedule(self, func, task_type='default', **kwargs) -> asyncio.Task:
+    def schedule(self, func, task_type='default', workspace_name=None,
+                 **kwargs) -> asyncio.Task:
         try:
             worker = self.get_worker(task_type)
         except KeyError:
             raise self.WorkerNotFound
 
         return self.workspaces.get(
-            worker.workspace,
+            workspace_name or worker.workspace,
             runtime=self.get_runtime_name(func)
         ).work(worker, func, **kwargs)
 
