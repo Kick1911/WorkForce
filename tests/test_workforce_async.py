@@ -361,10 +361,6 @@ def test_queue():
     class CustomWorkspace(AsyncWorkspace):
         pass
 
-    class Foo:
-        result = 0
-    bar = Foo()
-
     workspace = CustomWorkspace(1)
     workforce.workspaces.add("custom", workspace)
 
