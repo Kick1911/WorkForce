@@ -1,10 +1,8 @@
-import os
 import sys
 import asyncio
 import functools
 import concurrent.futures
 from threading import Thread
-from asyncio import TimeoutError
 from collections.abc import Callable
 
 
@@ -31,8 +29,10 @@ def handle_error(task):
 # Could not toolbox feature to work with Queue.
 # asyncio.Queue felt unstable when I tried.
 class Queue:
-    raw_queue = None
-    task = None
+    """
+    self.raw_queue: asyncio.Queue
+    self.task: asyncio.Task
+    """
 
     def __init__(self, loop=None, Queue=asyncio.Queue, **kwargs):
         self.raw_queue = Queue(**kwargs)
@@ -58,7 +58,9 @@ class Queue:
 
 
 class QueueManager:
-    queues = None
+    """
+    self.queues: dict
+    """
 
     class QueueNotFound(Exception):
         pass
@@ -93,10 +95,10 @@ class QueueManager:
 
 
 class Wrapper:
-    def __init__(self, *args, **kwargs):
+    def __init__(self):
         pass
 
-    async def run(self, func, **kwargs):
+    async def run(self, func):
         return await func()
 
     async def wrap(self, func: Callable, **kwargs):
@@ -111,7 +113,7 @@ class RetryWrapper(Wrapper):
         super().__init__(*args, **kwargs)
 
     async def run(self, func, **kwargs):
-        ex = None
+        ex = Exception(f"Unknown Exception: {kwargs}")
         retries = self.retries + 1
         for _ in range(retries):
             try:
@@ -128,7 +130,7 @@ class TimeoutWrapper(Wrapper):
         self.timeout = timeout
         super().__init__(*args, **kwargs)
 
-    async def run(self, func, **kwargs):
+    async def run(self, func):
         return await asyncio.wait_for(func(), timeout=self.timeout)
 
 
@@ -136,8 +138,7 @@ class BaseWorker:
     def __init__(self, name):
         self.name = name
 
-    def _create_task(self, coro, callback: Callable = None,
-                     loop=None) -> asyncio.Task:
+    def _create_task(self, coro, callback=None, loop=None) -> asyncio.Task:
         task = asyncio.ensure_future(coro, loop=loop)
         task.add_done_callback(handle_error)
         if callback:
@@ -155,8 +156,7 @@ class BaseWorker:
         coro = wrapper.wrap(functools.partial(func, *args, **kwargs))
         return self.run_coro_async(coro, loop=loop, **ekwargs)
 
-    def run_coro_async(self, coro, callback: Callable = None,
-                       loop=None) -> asyncio.Task:
+    def run_coro_async(self, coro, callback=None, loop=None) -> asyncio.Task:
         task = self._create_task(coro, callback=callback, loop=loop)
         asyncio.run_coroutine_threadsafe(coro, loop=loop)
         return task
@@ -165,12 +165,12 @@ class BaseWorker:
 class Worker(BaseWorker):
     workspace = "default"
 
-    async def handle_workitem(*args, **kwargs):
+    def handle_workitem(*args, **kwargs):
         """
         @returns: coroutine or tuple(coroutine, callback)
         Can also use the wrappers yourself to add behaviour to your tasks
         """
-        raise NotImplementedError
+        raise NotImplementedError(kwargs)
 
     def start_workflow(
         self, task, args: tuple = (), kwargs: dict = {},
@@ -189,8 +189,10 @@ class Worker(BaseWorker):
 
 
 class Loop:
-    loop = None
-    thread = None
+    """
+    self.loop: asyncio.Loop()
+    self.thread: Thread()
+    """
 
     def __init__(self):
         self.loop = asyncio.new_event_loop()
@@ -206,8 +208,10 @@ class Loop:
 
 
 class Workspace:
-    pool = None
-    toolbox = None
+    """
+    self.pool: <List>Loop()
+    self.toolbox: dict
+    """
 
     def __init__(self, pool_size=1):
         self.pool = self.create_pool(pool_size)
@@ -228,6 +232,13 @@ class Workspace:
             asyncio.run_coroutine_threadsafe(stop(), loop=loop.loop)
             loop.thread.join()
             loop.loop.close()
+
+    def run_func(self, func):
+        raise NotImplementedError(func)
+
+    @property
+    def _next(self):
+        raise NotImplementedError
 
     def work(self, worker, func, **kwargs) -> asyncio.Task:
         return worker.run_func_async(
@@ -270,7 +281,9 @@ class SyncWorkspace(Workspace):
 
 
 class WorkspaceManager:
-    workspaces = None
+    """
+    self.workspaces: dict
+    """
 
     class WorkspaceNameTaken(Exception):
         pass
@@ -291,10 +304,12 @@ class WorkspaceManager:
 
 
 class WorkForce:
-    workers = None
+    """
+    self.workers: dict
+    self.workspaces: WorkspaceManager()
+    self.queues: QueueManager()
+    """
     worker_name_delimiter = '.' # Cannot be an underscore "_"
-    workspaces = None
-    queues = None
 
     class WorkerNotFound(Exception):
         pass
